@@ -163,6 +163,7 @@ describe('MCP tools (PostgreSQL)', () => {
           'update_period',
           'delete_period',
           'log_metrics',
+          'import_wearable_workout',
           'update_training_zone',
         ].includes(tool.name),
       );
