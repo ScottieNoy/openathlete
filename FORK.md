@@ -1,7 +1,7 @@
 # Companion integration fork
 
 This fork preserves the OpenAthlete API changes used by the Apple Health companion integration.
-`main` follows upstream; `deployment/companion` contains the integration changes.
+`main` follows upstream; `deployment/companion` contains the integration changes and is the fork's default branch.
 Initial upstream base: `aad3ba3ff45d91e15b24a1b76ef16244c2488b0f`.
 
 ## Changes
