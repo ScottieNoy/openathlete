@@ -24,6 +24,10 @@ Keep `main` aligned with `openathleteorg/openathlete:main`. Merge reviewed upstr
 
 Creating this branch does not redeploy live services. Build from a pinned, tested integration commit using the existing deployment configuration, preserving the previous image for rollback. The web app has no companion source changes in this fork; the deployment's reverse-proxy configuration routes the companion service separately.
 
+## CI and delivery
+
+See [CI-CD.md](CI-CD.md) for automatic validation, checked image publishing and the manual production-release procedure.
+
 ## Validation
 
 Follow CONTRIBUTING.md for the full repository checks. Focused API checks:
