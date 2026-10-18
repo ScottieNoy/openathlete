@@ -11,6 +11,7 @@ describe('Strava full import', () => {
 
   function setup(existing: object[]) {
     const prisma = {
+      activityImportSource: { findMany: jest.fn().mockResolvedValue([]) },
       eventActivity: {
         findMany: jest.fn().mockResolvedValue(existing),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
