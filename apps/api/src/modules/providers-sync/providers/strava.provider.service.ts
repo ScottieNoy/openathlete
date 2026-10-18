@@ -14,6 +14,10 @@ import { AuthUser } from 'src/modules/auth/decorators/user.decorator';
 
 import { compressActivityStream } from '../../core/helpers/activity-stream';
 import {
+  providerActivityId,
+  stravaStorageId,
+} from '../../core/helpers/provider-activity-id';
+import {
   roundCadence,
   roundDistance,
   roundElevation,
@@ -330,7 +334,15 @@ export class StravaProviderService
       where: {
         event: { athleteId: account.athleteId },
         OR: [
-          { provider: 'STRAVA', externalId: activity.externalId },
+          {
+            provider: 'STRAVA',
+            externalId: {
+              in: [
+                activity.externalId,
+                stravaStorageId(account.athleteId, activity.externalId),
+              ],
+            },
+          },
           {
             sources: {
               some: {
@@ -451,7 +463,7 @@ export class StravaProviderService
       kilojoules: roundEnergy(activity.kilojoules),
       sport,
       stream: compressedActivityStream as object,
-      externalId: activity.id.toString(),
+      externalId: stravaStorageId(account.athleteId, activity.id.toString()),
     };
   }
 
@@ -554,7 +566,10 @@ export class StravaProviderService
         event: { athleteId: account.athleteId },
         provider: 'STRAVA',
         externalId: {
-          in: activities.map((a) => a.externalId),
+          in: activities.flatMap((a) => [
+            a.externalId,
+            stravaStorageId(account.athleteId, a.externalId),
+          ]),
         },
       },
       select: {
@@ -565,7 +580,9 @@ export class StravaProviderService
       },
     });
 
-    const existingIdsSet = new Set(existing.map((a) => a.externalId));
+    const existingIdsSet = new Set(
+      existing.map((a) => providerActivityId(a.provider, a.externalId)),
+    );
     const sources = await this.prisma.activityImportSource.findMany({
       where: {
         athleteId: account.athleteId,
@@ -575,7 +592,13 @@ export class StravaProviderService
       select: { externalId: true },
     });
     for (const source of sources) existingIdsSet.add(source.externalId);
-    await this.correctSports(existing, activities);
+    await this.correctSports(
+      existing.map((a) => ({
+        ...a,
+        externalId: providerActivityId(a.provider, a.externalId),
+      })),
+      activities,
+    );
 
     const newActivities = activities.filter(
       (a) => !existingIdsSet.has(a.externalId),
@@ -651,7 +674,15 @@ export class StravaProviderService
         where: {
           event: { athleteId: account.athleteId },
           OR: [
-            { provider: 'STRAVA', externalId: activityId },
+            {
+              provider: 'STRAVA',
+              externalId: {
+                in: [
+                  activityId,
+                  stravaStorageId(account.athleteId, activityId),
+                ],
+              },
+            },
             {
               sources: {
                 some: {

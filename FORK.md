@@ -18,6 +18,8 @@ The workout importer requires write scope and self access. It does not synthesiz
 
 An exact source identity always takes precedence, including after the athlete edits the calendar entry. New Apple Health/Strava identities are matched only within the same athlete, within 30 seconds of the start, with compatible sports, elapsed durations within 2% (minimum 30 seconds, maximum 120 seconds), and distances within 3% (minimum 100 metres) when both are available. Running/trail running and conventional cycling subtypes are compatible; electric and virtual cycling remain distinct. Moving time is not used as elapsed time.
 
+New Strava primary storage IDs include provider and athlete (`strava:<athlete>:<activity>`), so independently assigned numeric Garmin/Strava IDs cannot collide with the legacy global uniqueness constraint. Existing Strava rows remain readable without rewriting them. Calendar responses expose Strava's original numeric ID so provider links remain valid.
+
 A single unambiguous match links the new source ID to the existing activity. Multiple candidates are kept separate. Per-athlete PostgreSQL transaction locks serialize both import paths, and event creation plus source registration commit atomically. Strava historical import and webhook receipts also recognize secondary IDs.
 
 The first recording's content remains authoritative: this change does not replace Apple Health summaries with later Strava streams, overwrite notes, merge ambiguous matches, or delete pre-existing duplicates. Apple Health still protects matching existing recordings from other providers, but arrival-order guarantees currently cover the Apple Health and Strava import paths. Other providers do not yet take the shared import lock.

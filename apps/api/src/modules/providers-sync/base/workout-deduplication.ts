@@ -1,5 +1,6 @@
 import { ConnectorProvider, Prisma, SportType } from '@openathlete/database';
 
+import { stravaStorageId } from '../../core/helpers/provider-activity-id';
 import { PrismaService } from '../../prisma/services/prisma.service';
 
 type Recording = {
@@ -78,7 +79,17 @@ export async function saveImportedWorkout(
         where: {
           event: { athleteId: input.athleteId },
           OR: [
-            { provider: input.provider, externalId: input.legacyExternalId },
+            {
+              provider: input.provider,
+              externalId: {
+                in: [
+                  input.legacyExternalId,
+                  ...(input.provider === 'STRAVA'
+                    ? [stravaStorageId(input.athleteId, input.externalId)]
+                    : []),
+                ],
+              },
+            },
             { sources: { some: identity } },
           ],
         },

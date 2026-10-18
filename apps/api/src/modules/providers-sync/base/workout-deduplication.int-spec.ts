@@ -228,6 +228,42 @@ describe('Apple Health / Strava imports (PostgreSQL)', () => {
     expect(await prisma.event.count()).toBe(2);
   });
 
+  it('does not confuse Garmin and Strava numeric IDs, or the same ID in different athlete accounts', async () => {
+    await prisma.event.create({
+      data: {
+        athleteId,
+        type: 'ACTIVITY',
+        name: 'Different Garmin workout',
+        startDate: new Date('2025-12-01T10:00:00Z'),
+        endDate: new Date('2025-12-01T11:00:00Z'),
+        activity: {
+          create: {
+            provider: 'GARMIN',
+            externalId: '123',
+            sport: 'RUNNING',
+            movingTime: 3300,
+            distance: 10000,
+            elevationGain: 100,
+            averageSpeed: 3,
+            maxSpeed: 5,
+          },
+        },
+      },
+    });
+    const one = await strava.importActivity(account(), fetchedStrava());
+    const two = await strava.importActivity(
+      account(otherAthleteId),
+      fetchedStrava(),
+    );
+    expect(one.activity.externalId).toBe(`strava:${athleteId}:123`);
+    expect(two.activity.externalId).toBe(`strava:${otherAthleteId}:123`);
+    expect(await prisma.event.count()).toBe(3);
+    expect(await prisma.activityImportSource.count()).toBe(2);
+    expect(
+      (await strava.importActivity(account(), fetchedStrava())).created,
+    ).toBe(false);
+  });
+
   it('does not combine nearby recordings with different duration or distance', async () => {
     await apple();
     await strava.importActivity(
@@ -294,7 +330,10 @@ describe('Apple Health / Strava imports (PostgreSQL)', () => {
     await prisma.activityImportSource.deleteMany();
     await prisma.eventActivity.update({
       where: { eventActivityId: first.activity.eventActivityId },
-      data: { stream: { time: [0, 1], heartrate: [120, 121] } },
+      data: {
+        externalId: '123',
+        stream: { time: [0, 1], heartrate: [120, 121] },
+      },
     });
     expect((await apple()).eventId).toBe(first.activity.eventId);
     expect(await prisma.eventActivity.findFirst()).toMatchObject({

@@ -103,4 +103,26 @@ describe('Strava full import', () => {
 
     expect(prisma.eventActivity.updateMany).not.toHaveBeenCalled();
   });
+
+  it('recognizes namespaced storage IDs for history suppression and sport correction', async () => {
+    const { service, prisma, queue } = setup([
+      {
+        eventActivityId: 1,
+        externalId: 'strava:7:12',
+        sport: SportType.RUNNING,
+        provider: ConnectorProvider.STRAVA,
+      },
+    ]);
+    jest
+      .spyOn(service, 'importActivities')
+      .mockResolvedValue([fetched('12', SportType.TRAIL_RUNNING)]);
+    expect(await service.queueFullImport(account)).toEqual({
+      queuedActivities: 0,
+    });
+    expect(queue.addActivityImportJobs).not.toHaveBeenCalled();
+    expect(prisma.eventActivity.updateMany).toHaveBeenCalledWith({
+      where: { eventActivityId: { in: [1] } },
+      data: { sport: SportType.TRAIL_RUNNING },
+    });
+  });
 });
