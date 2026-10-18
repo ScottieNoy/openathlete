@@ -23,6 +23,8 @@ describe('cross-provider workout matching', () => {
   it.each([
     { sport: SportType.CYCLING },
     { distance: 15000 },
+    { distance: NaN },
+    { distance: -1 },
     { startDate: new Date('2026-01-01T10:00:31Z') },
     { endDate: new Date('2026-01-01T10:30:00Z') },
     { endDate: run.startDate },

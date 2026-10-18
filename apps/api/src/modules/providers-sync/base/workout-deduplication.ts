@@ -30,6 +30,10 @@ export function sameWorkout(a: Recording, b: Recording): boolean {
     !Number.isFinite(durationB) ||
     durationA <= 0 ||
     durationB <= 0 ||
+    [a.distance, b.distance].some(
+      (distance) =>
+        distance != null && (!Number.isFinite(distance) || distance < 0),
+    ) ||
     !compatibleSport(a.sport, b.sport) ||
     Math.abs(a.startDate.getTime() - b.startDate.getTime()) > 30000 ||
     Math.abs(durationA - durationB) >
@@ -38,8 +42,6 @@ export function sameWorkout(a: Recording, b: Recording): boolean {
     return false;
   // Zero/missing distance is common for strength, yoga and indoor recordings.
   if (a.distance && b.distance) {
-    if (!Number.isFinite(a.distance) || !Number.isFinite(b.distance))
-      return false;
     return (
       Math.abs(a.distance - b.distance) <=
       Math.max(100, Math.min(a.distance, b.distance) * 0.03)
@@ -107,7 +109,12 @@ export async function saveImportedWorkout(
           activity: {
             provider:
               input.provider === 'STRAVA' ? 'APPLE_HEALTH' : { not: null },
-            sources: { none: { provider: input.provider } },
+            // Health may itself contain copies from multiple recording apps.
+            // A second Strava ID must not reuse a recording already linked to
+            // a different Strava activity.
+            ...(input.provider === 'STRAVA' && {
+              sources: { none: { provider: input.provider } },
+            }),
           },
         },
         include: { activity: true },
@@ -115,7 +122,6 @@ export async function saveImportedWorkout(
       const matches = candidates.filter(
         (event) =>
           event.activity &&
-          event.activity.provider !== input.provider &&
           sameWorkout(input, {
             ...event,
             sport: event.activity.sport,

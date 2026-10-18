@@ -246,13 +246,48 @@ describe('Apple Health / Strava imports (PostgreSQL)', () => {
 
   it('leaves ambiguous pre-existing duplicates untouched rather than guessing or deleting', async () => {
     await apple();
-    await apple({
-      ...health,
-      sourceId: '00000000-0000-0000-0000-000000000002',
+    // Simulate duplicates that already existed before this release.
+    await prisma.event.create({
+      data: {
+        athleteId,
+        type: 'ACTIVITY',
+        name: 'Old duplicate',
+        startDate,
+        endDate,
+        activity: {
+          create: {
+            provider: 'APPLE_HEALTH',
+            externalId: 'old-health-duplicate',
+            sport: 'RUNNING',
+            movingTime: 3300,
+            distance: 10000,
+            elevationGain: 100,
+            averageSpeed: 3,
+            maxSpeed: 5,
+          },
+        },
+      },
     });
     await strava.importActivity(account(), fetchedStrava());
     expect(await prisma.event.count()).toBe(3);
   });
+
+  it.each(['apple-first', 'strava-first'])(
+    'recognizes multiple Health UUIDs for copies from recording apps: %s',
+    async (order) => {
+      if (order === 'strava-first')
+        await strava.importActivity(account(), fetchedStrava());
+      await apple();
+      await apple({
+        ...health,
+        sourceId: '00000000-0000-0000-0000-000000000002',
+      });
+      if (order === 'apple-first')
+        await strava.importActivity(account(), fetchedStrava());
+      expect(await prisma.event.count()).toBe(1);
+      expect(await prisma.activityImportSource.count()).toBe(3);
+    },
+  );
 
   it('recognizes legacy imports without aliases and preserves their existing streams', async () => {
     const first = await strava.importActivity(account(), fetchedStrava());
