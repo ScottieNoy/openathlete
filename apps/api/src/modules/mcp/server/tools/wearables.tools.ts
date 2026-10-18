@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
-import { Prisma, SportType } from '@openathlete/database';
+import { SportType } from '@openathlete/database';
 
+import { saveImportedWorkout } from '../../../providers-sync/base/workout-deduplication';
 import { ToolError, run } from '../context';
 import { ToolRegistrar, registerTool } from './deps';
 
@@ -84,108 +85,55 @@ export const registerWearablesTools: ToolRegistrar = (server, ctx, deps) => {
         )
           throw new ToolError('Invalid workout lap');
         const externalId = `openwearables:${scope.athleteId}:${workout.sourceId.toLowerCase()}`;
-        const save = () =>
-          deps.prisma.$transaction(
-            async (tx) => {
-              const own = await tx.eventActivity.findUnique({
-                where: { externalId },
-                include: { event: true },
-              });
-              if (own) {
-                if (own.event.athleteId !== scope.athleteId)
-                  throw new ToolError('Workout owner mismatch');
-                return {
-                  activity: own,
-                  alreadyImported: true,
-                  protected: false,
-                };
-              }
-              // Nearby recordings from Strava/Garmin/Health are one workout. Prefer
-              // the existing activity (which may have richer streams) to a duplicate.
-              const existing = await tx.event.findFirst({
-                where: {
-                  athleteId: scope.athleteId,
-                  type: 'ACTIVITY',
-                  startDate: {
-                    gte: new Date(startDate.getTime() - 30000),
-                    lte: new Date(startDate.getTime() + 30000),
-                  },
-                  activity: { sport: workout.sport },
-                },
-                include: { activity: true },
-              });
-              if (existing?.activity)
-                return {
-                  activity: existing.activity,
-                  alreadyImported: true,
-                  protected: true,
-                };
-              const {
-                sourceId: _sourceId,
-                name,
+        const {
+          sourceId: _sourceId,
+          name,
+          sport,
+          start: _start,
+          end: _end,
+          laps,
+          ...summary
+        } = workout;
+        const saved = await saveImportedWorkout(deps.prisma, {
+          athleteId: scope.athleteId,
+          provider: 'APPLE_HEALTH',
+          externalId: workout.sourceId.toLowerCase(),
+          legacyExternalId: externalId,
+          startDate,
+          endDate,
+          sport,
+          distance: workout.distance,
+          create: {
+            athleteId: scope.athleteId,
+            type: 'ACTIVITY',
+            name,
+            startDate,
+            endDate,
+            activity: {
+              create: {
+                ...summary,
                 sport,
-                start: _start,
-                end: _end,
-                laps,
-                ...summary
-              } = workout;
-              const created = await tx.event.create({
-                data: {
-                  athleteId: scope.athleteId,
-                  type: 'ACTIVITY',
-                  name,
-                  startDate,
-                  endDate,
-                  activity: {
-                    create: {
-                      ...summary,
-                      sport,
-                      externalId,
-                      provider: 'APPLE_HEALTH',
-                      description:
-                        'Imported from Apple Health through Open Wearables. GPS and sensor streams are not provided by this SDK version.',
-                      segments: {
-                        create: laps.map((lap, index) => ({
-                          segmentType: 'LAP',
-                          name: `Lap ${index + 1}`,
-                          orderIndex: index,
-                          startTimeSeconds: lap.start,
-                          endTimeSeconds: lap.end,
-                          movingTime: lap.end - lap.start,
-                          ...(lap.distance !== undefined && {
-                            distance: lap.distance,
-                          }),
-                        })),
-                      },
-                    },
-                  },
+                externalId,
+                provider: 'APPLE_HEALTH',
+                description:
+                  'Imported from Apple Health through Open Wearables. GPS and sensor streams are not provided by this SDK version.',
+                segments: {
+                  create: laps.map((lap, index) => ({
+                    segmentType: 'LAP',
+                    name: `Lap ${index + 1}`,
+                    orderIndex: index,
+                    startTimeSeconds: lap.start,
+                    endTimeSeconds: lap.end,
+                    movingTime: lap.end - lap.start,
+                    ...(lap.distance !== undefined && {
+                      distance: lap.distance,
+                    }),
+                  })),
                 },
-                include: { activity: true },
-              });
-              return {
-                activity: created.activity!,
-                alreadyImported: false,
-                protected: false,
-              };
+              },
             },
-            {
-              isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-              timeout: 15000,
-            },
-          );
-        let saved: Awaited<ReturnType<typeof save>> | undefined;
-        for (let attempt = 0; !saved; attempt++) {
-          try {
-            saved = await save();
-          } catch (error) {
-            if (
-              !(error instanceof Prisma.PrismaClientKnownRequestError) ||
-              !['P2002', 'P2034'].includes(error.code) ||
-              attempt >= 2
-            )
-              throw error;
-          }
-        }
+          },
+        });
         let processingQueued = true;
         if (!saved.protected) {
           try {
@@ -200,7 +148,7 @@ export const registerWearablesTools: ToolRegistrar = (server, ctx, deps) => {
         }
         return {
           eventId: saved.activity.eventId,
-          alreadyImported: saved.alreadyImported,
+          alreadyImported: !saved.created,
           protected: saved.protected,
           processingQueued,
         };

@@ -28,9 +28,11 @@ function setup(self = true, canWrite = true) {
     },
   };
   const tx = {
-    eventActivity: { findUnique: jest.fn().mockResolvedValue(null) },
+    eventActivity: { findFirst: jest.fn().mockResolvedValue(null) },
+    $queryRaw: jest.fn().mockResolvedValue([]),
+    activityImportSource: { upsert: jest.fn() },
     event: {
-      findFirst: jest.fn().mockResolvedValue(null),
+      findMany: jest.fn().mockResolvedValue([]),
       create: jest
         .fn()
         .mockResolvedValue({ activity: { eventActivityId: 7, eventId: 9 } }),
@@ -86,8 +88,8 @@ describe('Open Wearables workout import', () => {
   });
   it('returns an existing source import without rewriting user edits', async () => {
     const s = setup();
-    s.tx.eventActivity.findUnique.mockResolvedValue({
-      event: { athleteId: 1 },
+    s.tx.eventActivity.findFirst.mockResolvedValue({
+      provider: 'APPLE_HEALTH',
       eventId: 9,
       eventActivityId: 7,
     } as never);
@@ -97,9 +99,19 @@ describe('Open Wearables workout import', () => {
   });
   it('protects a nearby existing recording from another provider', async () => {
     const s = setup();
-    s.tx.event.findFirst.mockResolvedValue({
-      activity: { eventActivityId: 7, eventId: 9 },
-    } as never);
+    s.tx.event.findMany.mockResolvedValue([
+      {
+        startDate: new Date(workout.start),
+        endDate: new Date(workout.end),
+        activity: {
+          eventActivityId: 7,
+          eventId: 9,
+          provider: 'STRAVA',
+          sport: 'CYCLING',
+          distance: 25000,
+        },
+      },
+    ] as never);
     const result = await s.call();
     expect(result.structuredContent?.protected).toBe(true);
     expect(s.tx.event.create).not.toHaveBeenCalled();

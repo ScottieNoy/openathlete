@@ -217,9 +217,26 @@ model EventActivity {
   feedbackQuestions   ActivityFeedbackQuestion[]
   extractedInjuries   AthleteInjury[] // injuries extracted from feedback
   feedbackEmbedding   ActivityFeedbackEmbedding? // vector embedding of feedback responses
+  sources             ActivityImportSource[]
 
   @@unique([externalId]) // Index for fast lookup by external provider ID
   @@map("event_activity")
+}
+
+/// Stable provider identities for one calendar activity. Secondary identities
+/// survive changes to the activity's title, sport, time and summary.
+model ActivityImportSource {
+  activityImportSourceId Int               @id @default(autoincrement()) @map("activity_import_source_id")
+  athleteId              Int               @map("athlete_id")
+  provider               ConnectorProvider
+  externalId             String            @map("external_id")
+  activity               EventActivity     @relation(fields: [eventActivityId], references: [eventActivityId], onDelete: Cascade)
+  eventActivityId        Int               @map("event_activity_id")
+  createdAt             DateTime          @default(now()) @map("created_at")
+
+  @@unique([athleteId, provider, externalId])
+  @@index([eventActivityId])
+  @@map("activity_import_source")
 }
 
 /// Weather data for an activity.
