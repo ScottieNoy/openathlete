@@ -216,18 +216,25 @@ export class OAuthClientsService {
       this.logger.warn(`Client metadata document ${clientId} names another id`);
       return null;
     }
-    // Public clients only. The plural CIMD field lists capabilities; the
-    // legacy singular field is a preference, not a requirement when that
-    // list is present. Select the supported public-client method.
+    // ChatGPT publishes ['none', 'private_key_jwt'] with a private_key_jwt
+    // preference: https://developers.openai.com/plugins/build/auth#client-registration
+    // This is the RP Metadata Choices extension, not RFC 7591 alone:
+    // https://openid.net/specs/openid-connect-rp-metadata-choices-1_0-final.html#section-2
+    // Accept only public-client capability; an explicit preference must be
+    // in the list. Without a list, keep the legacy singular-method check.
     const methods = document.token_endpoint_auth_methods_supported;
+    const method = document.token_endpoint_auth_method;
     const supportsPublicClient =
       methods === undefined
-        ? !document.token_endpoint_auth_method ||
-          document.token_endpoint_auth_method === 'none'
+        ? !method || method === 'none'
         : Array.isArray(methods) &&
           methods.length > 0 &&
-          methods.every((method) => typeof method === 'string') &&
-          methods.includes('none');
+          methods.every(
+            (value) => typeof value === 'string' && value.length > 0,
+          ) &&
+          methods.includes('none') &&
+          (method === undefined ||
+            (typeof method === 'string' && methods.includes(method)));
     if (!supportsPublicClient) {
       this.logger.warn(
         `Client ${clientId} asks for an unsupported auth method`,
