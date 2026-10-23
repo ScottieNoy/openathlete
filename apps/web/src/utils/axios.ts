@@ -5,7 +5,7 @@ import axios, { isAxiosError } from 'axios';
 
 import { ConnectorProvider, Event } from '@openathlete/shared';
 
-import { ACCESS_TOKEN, REFRESH_TOKEN, setItem } from './local-storage';
+import { ACCESS_TOKEN, REFRESH_TOKEN, getItem, setItem } from './local-storage';
 
 export const routes = {
   auth: {
@@ -266,6 +266,13 @@ const client = axios.create({
 export const isNetworkError = (error: unknown) =>
   isAxiosError(error) && !error.response;
 
+export const isSessionUnavailable = (error: unknown) =>
+  isNetworkError(error) ||
+  (isAxiosError(error) &&
+    (error.response?.status === 408 ||
+      error.response?.status === 429 ||
+      (error.response?.status ?? 0) >= 500));
+
 client.interceptors.request.use(async (config) => {
   const token = await getAccessToken();
   if (token?.refreshToken) {
@@ -280,10 +287,17 @@ client.interceptors.request.use(async (config) => {
 
 client.interceptors.response.use(undefined, async (error) => {
   if (isAxiosError(error) && error.response?.status === 401) {
-    localStorage.removeItem(ACCESS_TOKEN);
-    localStorage.removeItem(REFRESH_TOKEN);
-    const queryClient = new QueryClient();
-    queryClient.clear();
+    // A late failure from an older request must not erase a newer login.
+    const current = getItem(ACCESS_TOKEN);
+    if (
+      !current ||
+      error.config?.headers?.Authorization === `Bearer ${current}`
+    ) {
+      localStorage.removeItem(ACCESS_TOKEN);
+      localStorage.removeItem(REFRESH_TOKEN);
+      const queryClient = new QueryClient();
+      queryClient.clear();
+    }
   }
   // Callers still need the failure: swallowing it made a wrong password look
   // like a broken response, and an unauthorized change like a success.
