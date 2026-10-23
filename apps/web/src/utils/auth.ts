@@ -1,8 +1,13 @@
 import { API_BASE_URL } from '@/config';
-import axios from 'axios';
+import axios, { AxiosError, isAxiosError } from 'axios';
 
 import { routes } from './axios';
-import { ACCESS_TOKEN, REFRESH_TOKEN, getItem } from './local-storage';
+import {
+  ACCESS_TOKEN,
+  REFRESH_TOKEN,
+  getItem,
+  removeItem,
+} from './local-storage';
 
 function decodeJWT(token: string): { exp?: number } | null {
   try {
@@ -45,16 +50,42 @@ async function refreshToken(): Promise<TokenInfo | null> {
       },
     );
 
-    if (!tokenData.data) return null;
-    const { accessToken, refreshToken } = tokenData.data;
+    const { accessToken, refreshToken } = tokenData.data ?? {};
+    if (
+      typeof accessToken !== 'string' ||
+      !accessToken ||
+      typeof refreshToken !== 'string' ||
+      !refreshToken
+    ) {
+      throw new AxiosError(
+        'Invalid token refresh response',
+        AxiosError.ERR_BAD_RESPONSE,
+      );
+    }
+    if (getItem(REFRESH_TOKEN) !== token) {
+      throw new AxiosError(
+        'Session changed during refresh',
+        AxiosError.ERR_CANCELED,
+      );
+    }
 
     return {
       accessToken,
       refreshToken,
       refreshed: true,
     };
-  } catch {
-    return null;
+  } catch (error) {
+    // A temporary refresh failure must not become an anonymous /user/me request:
+    // its inevitable 401 would erase a refresh token that may still be valid.
+    if (
+      isAxiosError(error) &&
+      error.response?.status === 401 &&
+      getItem(REFRESH_TOKEN) === token
+    ) {
+      removeItem(ACCESS_TOKEN);
+      removeItem(REFRESH_TOKEN);
+    }
+    throw error;
   }
 }
 

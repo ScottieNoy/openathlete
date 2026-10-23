@@ -1,7 +1,7 @@
 import { UserAPI } from '@/api/user';
 import { getPath } from '@/routes/paths';
 import { isValidToken } from '@/utils/auth';
-import { isNetworkError } from '@/utils/axios';
+import { isSessionUnavailable } from '@/utils/axios';
 import { signOutFirebase } from '@/utils/firebase-auth';
 import { saveLanguageChoice } from '@/utils/language-choice';
 import { ACCESS_TOKEN, clear, getItem, setItem } from '@/utils/local-storage';
@@ -76,7 +76,7 @@ export function AuthProvider({ children }: Props) {
     // treating it as signed out would send the user to the login page
     const signedOutOrOffline = (error: unknown) =>
       dispatch(
-        isNetworkError(error)
+        isSessionUnavailable(error)
           ? { type: Types.OFFLINE }
           : { type: Types.INITIAL, payload: { user: null } },
       );

@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { AuthConsumer, AuthProvider, useAuthContext } from '@/contexts/auth';
-import { ACCESS_TOKEN } from '@/utils/local-storage';
+import { ACCESS_TOKEN, REFRESH_TOKEN } from '@/utils/local-storage';
 import { queryClient } from '@/utils/query-client';
 import { waitUntil } from '@/utils/test/wait-until';
 import { QueryClientProvider } from '@tanstack/react-query';
+import { AxiosError } from 'axios';
 import { act } from 'react';
 import { type Root, createRoot } from 'react-dom/client';
 import {
@@ -109,6 +110,60 @@ describe('AuthGuard', () => {
         .click();
     });
   };
+
+  it('keeps the session during a server outage and retries without visiting login', async () => {
+    localStorage.setItem(ACCESS_TOKEN, tokenOf(1));
+    localStorage.setItem(REFRESH_TOKEN, 'still-valid-refresh');
+    api.getMe.mockRejectedValueOnce(
+      new AxiosError(
+        'Service unavailable',
+        'ERR_BAD_RESPONSE',
+        undefined,
+        undefined,
+        {
+          status: 503,
+          data: {},
+          statusText: 'Service unavailable',
+          headers: {},
+          config: { headers: {} } as never,
+        },
+      ),
+    );
+    const router = createMemoryRouter(
+      [
+        { path: '/auth/login', element: <p>login</p> },
+        {
+          path: '/dashboard/calendar',
+          element: (
+            <AuthGuard>
+              <Calendar />
+            </AuthGuard>
+          ),
+        },
+      ],
+      { initialEntries: ['/dashboard/calendar'] },
+    );
+    await act(async () =>
+      root.render(
+        <AuthProvider>
+          <QueryClientProvider client={queryClient}>
+            <AuthConsumer>
+              <RouterProvider router={router} />
+            </AuthConsumer>
+          </QueryClientProvider>
+        </AuthProvider>,
+      ),
+    );
+    await waitUntil(() =>
+      expect(container.querySelector('[role="alert"]')).not.toBeNull(),
+    );
+    expect(router.state.location.pathname).toBe('/dashboard/calendar');
+    expect(localStorage.getItem(REFRESH_TOKEN)).toBe('still-valid-refresh');
+    await click('offline_retry');
+    await waitUntil(() => expect(container.textContent).toBe('calendar'));
+    expect(router.state.location.pathname).toBe('/dashboard/calendar');
+    expect(localStorage.getItem(REFRESH_TOKEN)).toBe('still-valid-refresh');
+  });
 
   it('sends a new account to the onboarding after another one logged out in the same tab', async () => {
     localStorage.setItem(ACCESS_TOKEN, tokenOf(1));
