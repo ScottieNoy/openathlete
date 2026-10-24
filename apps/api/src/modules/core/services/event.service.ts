@@ -59,6 +59,7 @@ import {
   reductActivityStreamToResolution,
   uncompressActivityStream,
 } from '../helpers/activity-stream';
+import { providerActivityId } from '../helpers/provider-activity-id';
 import { EVENT_INCLUDES } from './event-includes';
 import { WorkoutService } from './workout.service';
 
@@ -114,6 +115,10 @@ export class EventService {
       ...(activity
         ? {
             ...activityFields,
+            externalId: providerActivityId(
+              activity.provider,
+              activity.externalId,
+            ),
             // Null until the activity is processed
             trainingLoad: trainingLoadEntries?.length
               ? trainingLoadEntries.reduce((sum, entry) => sum + entry.value, 0)

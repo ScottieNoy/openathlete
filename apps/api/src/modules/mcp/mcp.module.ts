@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth';
 import { CoreModule } from '../core';
 import { PrismaService } from '../prisma/services/prisma.service';
+import { QueueModule } from '../queue';
 import { McpAuthService } from './auth/mcp-auth.service';
 import { OAuthClientsService } from './auth/oauth-clients.service';
 import { OAuthService } from './auth/oauth.service';
@@ -18,7 +19,7 @@ import { McpServerFactory } from './server/mcp-server.factory';
  * personal token.
  */
 @Module({
-  imports: [AuthModule, CoreModule],
+  imports: [AuthModule, CoreModule, QueueModule],
   controllers: [
     // Before McpController: /mcp/connections must not reach its catch-all
     McpConnectionsController,

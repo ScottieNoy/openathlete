@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 
 import { CaslAbilityFactory } from 'src/modules/auth';
 import { CycleService } from 'src/modules/core/services/cycle.service';
@@ -12,6 +12,7 @@ import { RecordService } from 'src/modules/core/services/record.service';
 import { TrainingLoadService } from 'src/modules/core/services/training-load.service';
 import { TrainingZoneService } from 'src/modules/core/services/training-zone.service';
 import { PrismaService } from 'src/modules/prisma/services/prisma.service';
+import { QueueService } from 'src/modules/queue/queue.service';
 
 import { McpPrincipal } from '../auth/mcp-auth.service';
 import { ToolContext } from './context';
@@ -22,6 +23,7 @@ import { registerCalendarReadTools } from './tools/calendar-read.tools';
 import { registerCalendarWriteTools } from './tools/calendar-write.tools';
 import { ToolDeps } from './tools/deps';
 import { registerLoadTools } from './tools/load.tools';
+import { registerWearablesTools } from './tools/wearables.tools';
 
 /**
  * Builds the MCP server of one request. Tools are registered per request
@@ -43,6 +45,7 @@ export class McpServerFactory {
     load: TrainingLoadService,
     zones: TrainingZoneService,
     records: RecordService,
+    @Optional() queue?: QueueService,
   ) {
     this.deps = {
       prisma,
@@ -55,6 +58,7 @@ export class McpServerFactory {
       load,
       zones,
       records,
+      queue,
     };
   }
 
@@ -80,6 +84,7 @@ export class McpServerFactory {
     if (ctx.can('write')) {
       registerCalendarWriteTools(server, ctx, this.deps);
       registerAthleteWriteTools(server, ctx, this.deps);
+      registerWearablesTools(server, ctx, this.deps);
     }
     registerPrompts(server, ctx.can('write'));
     return server;

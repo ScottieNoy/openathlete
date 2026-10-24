@@ -5,8 +5,6 @@ import { ConfigService } from '@nestjs/config';
 
 import {
   ConnectorProvider,
-  EventActivity,
-  EventType,
   ProviderAccount,
   SportType,
 } from '@openathlete/database';
@@ -15,6 +13,10 @@ import { ActivityStream, ApiEnvSchemaType } from '@openathlete/shared';
 import { AuthUser } from 'src/modules/auth/decorators/user.decorator';
 
 import { compressActivityStream } from '../../core/helpers/activity-stream';
+import {
+  providerActivityId,
+  stravaStorageId,
+} from '../../core/helpers/provider-activity-id';
 import {
   roundCadence,
   roundDistance,
@@ -41,6 +43,7 @@ import {
   ProviderImportCapability,
 } from '../base/provider-import.interface';
 import { providerRedirectUri } from '../base/provider-urls';
+import { saveImportedWorkout } from '../base/workout-deduplication';
 
 @Injectable()
 export class StravaProviderService
@@ -329,44 +332,55 @@ export class StravaProviderService
   ): Promise<ImportResult> {
     const existing = await this.prisma.eventActivity.findFirst({
       where: {
-        externalId: activity.externalId,
+        event: { athleteId: account.athleteId },
+        OR: [
+          {
+            provider: 'STRAVA',
+            externalId: {
+              in: [
+                activity.externalId,
+                stravaStorageId(account.athleteId, activity.externalId),
+              ],
+            },
+          },
+          {
+            sources: {
+              some: {
+                athleteId: account.athleteId,
+                provider: 'STRAVA',
+                externalId: activity.externalId,
+              },
+            },
+          },
+        ],
       },
     });
-
-    if (existing) {
-      return { activity: existing, created: false };
-    }
-
-    // Get athlete (only need athleteId, no need for user relation)
-    const athlete = await this.prisma.athlete.findUnique({
-      where: { athleteId: account.athleteId },
-      select: { athleteId: true },
-    });
-
-    if (!athlete) {
-      throw new Error('Athlete not found');
-    }
-
-    // Create event
-    const event = await this.prisma.event.create({
-      data: {
-        athleteId: athlete.athleteId,
+    if (existing) return { activity: existing, created: false };
+    // Fetch streams outside the transaction/athlete lock. Persistence checks
+    // both provider identities and nearby recordings again under the lock.
+    const data = await this.fetchStravaActivityData(
+      account,
+      activity.raw as StravaSummaryActivity,
+    );
+    const result = await saveImportedWorkout(this.prisma, {
+      athleteId: account.athleteId,
+      provider: 'STRAVA',
+      externalId: activity.externalId,
+      legacyExternalId: activity.externalId,
+      startDate: new Date(activity.startDate),
+      endDate: new Date(activity.endDate),
+      sport: data.sport,
+      distance: data.distance,
+      create: {
+        athleteId: account.athleteId,
         name: activity.name,
-        type: EventType.ACTIVITY,
+        type: 'ACTIVITY',
         startDate: activity.startDate,
         endDate: activity.endDate,
+        activity: { create: data },
       },
     });
-
-    // Fetch full activity data with streams
-    const stravaActivity = activity.raw as StravaSummaryActivity;
-    const savedActivity = await this.fetchStravaActivityData(
-      account,
-      event,
-      stravaActivity,
-    );
-
-    return { activity: savedActivity, created: true };
+    return result;
   }
 
   /**
@@ -374,9 +388,8 @@ export class StravaProviderService
    */
   private async fetchStravaActivityData(
     account: ProviderAccount,
-    event: { eventId: number },
     activity: StravaSummaryActivity,
-  ): Promise<EventActivity> {
+  ) {
     const shouldFetchStreams = !activity.manual;
 
     let streams: StravaSteam[] = [];
@@ -434,33 +447,24 @@ export class StravaProviderService
 
     const sport = stravaActivitySport(activity);
 
-    const savedActivity = await this.prisma.eventActivity.create({
-      data: {
-        provider: ConnectorProvider.STRAVA,
-        distance: roundDistance(activity.distance),
-        elevationGain: roundElevation(activity.total_elevation_gain),
-        movingTime: activity.moving_time,
-        averageSpeed: roundSpeed(activity.average_speed) ?? 0,
-        maxSpeed: roundSpeed(activity.max_speed) ?? 0,
-        averageCadence: roundCadence(activity.average_cadence),
-        averageWatts: roundPower(activity.average_watts),
-        maxWatts: roundPower(activity.max_watts),
-        weightedAverageWatts: roundPower(activity.weighted_average_watts),
-        averageHeartrate: roundHeartrate(activity.average_heartrate),
-        maxHeartrate: roundHeartrate(activity.max_heartrate),
-        kilojoules: roundEnergy(activity.kilojoules),
-        sport,
-        stream: compressedActivityStream as object,
-        externalId: activity.id.toString(),
-        event: {
-          connect: {
-            eventId: event.eventId,
-          },
-        },
-      },
-    });
-
-    return savedActivity;
+    return {
+      provider: ConnectorProvider.STRAVA as typeof ConnectorProvider.STRAVA,
+      distance: roundDistance(activity.distance),
+      elevationGain: roundElevation(activity.total_elevation_gain),
+      movingTime: activity.moving_time,
+      averageSpeed: roundSpeed(activity.average_speed) ?? 0,
+      maxSpeed: roundSpeed(activity.max_speed) ?? 0,
+      averageCadence: roundCadence(activity.average_cadence),
+      averageWatts: roundPower(activity.average_watts),
+      maxWatts: roundPower(activity.max_watts),
+      weightedAverageWatts: roundPower(activity.weighted_average_watts),
+      averageHeartrate: roundHeartrate(activity.average_heartrate),
+      maxHeartrate: roundHeartrate(activity.max_heartrate),
+      kilojoules: roundEnergy(activity.kilojoules),
+      sport,
+      stream: compressedActivityStream as object,
+      externalId: stravaStorageId(account.athleteId, activity.id.toString()),
+    };
   }
 
   /**
@@ -559,8 +563,13 @@ export class StravaProviderService
 
     const existing = await this.prisma.eventActivity.findMany({
       where: {
+        event: { athleteId: account.athleteId },
+        provider: 'STRAVA',
         externalId: {
-          in: activities.map((a) => a.externalId),
+          in: activities.flatMap((a) => [
+            a.externalId,
+            stravaStorageId(account.athleteId, a.externalId),
+          ]),
         },
       },
       select: {
@@ -571,8 +580,25 @@ export class StravaProviderService
       },
     });
 
-    const existingIdsSet = new Set(existing.map((a) => a.externalId));
-    await this.correctSports(existing, activities);
+    const existingIdsSet = new Set(
+      existing.map((a) => providerActivityId(a.provider, a.externalId)),
+    );
+    const sources = await this.prisma.activityImportSource.findMany({
+      where: {
+        athleteId: account.athleteId,
+        provider: 'STRAVA',
+        externalId: { in: activities.map((a) => a.externalId) },
+      },
+      select: { externalId: true },
+    });
+    for (const source of sources) existingIdsSet.add(source.externalId);
+    await this.correctSports(
+      existing.map((a) => ({
+        ...a,
+        externalId: providerActivityId(a.provider, a.externalId),
+      })),
+      activities,
+    );
 
     const newActivities = activities.filter(
       (a) => !existingIdsSet.has(a.externalId),
@@ -646,7 +672,27 @@ export class StravaProviderService
       // Check if activity already imported
       const existingActivity = await this.prisma.eventActivity.findFirst({
         where: {
-          externalId: activityId,
+          event: { athleteId: account.athleteId },
+          OR: [
+            {
+              provider: 'STRAVA',
+              externalId: {
+                in: [
+                  activityId,
+                  stravaStorageId(account.athleteId, activityId),
+                ],
+              },
+            },
+            {
+              sources: {
+                some: {
+                  athleteId: account.athleteId,
+                  provider: 'STRAVA',
+                  externalId: activityId,
+                },
+              },
+            },
+          ],
         },
       });
 

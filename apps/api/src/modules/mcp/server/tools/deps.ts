@@ -15,12 +15,14 @@ import { RecordService } from 'src/modules/core/services/record.service';
 import { TrainingLoadService } from 'src/modules/core/services/training-load.service';
 import { TrainingZoneService } from 'src/modules/core/services/training-zone.service';
 import { PrismaService } from 'src/modules/prisma/services/prisma.service';
+import { QueueService } from 'src/modules/queue/queue.service';
 
 import { ToolContext } from '../context';
 
 /** The services tools call: writes go through them, with their checks */
 export type ToolDeps = {
   prisma: PrismaService;
+  queue?: QueueService;
   abilities: CaslAbilityFactory;
   events: EventService;
   bulk: EventBulkService;
