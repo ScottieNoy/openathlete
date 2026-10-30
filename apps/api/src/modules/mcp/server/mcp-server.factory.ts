@@ -67,7 +67,7 @@ export class McpServerFactory {
       {
         name: 'openathlete',
         title: 'OpenAthlete',
-        version: '1.0.0',
+        version: '1.1.0',
         websiteUrl: 'https://openathlete.org',
       },
       {

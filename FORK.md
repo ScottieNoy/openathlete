@@ -24,6 +24,20 @@ A single unambiguous match links the new source ID to the existing activity. Mul
 
 The first recording's content remains authoritative: this change does not replace Apple Health summaries with later Strava streams, overwrite notes, merge ambiguous matches, or delete pre-existing duplicates. Apple Health still protects matching existing recordings from other providers, but arrival-order guarantees currently cover the Apple Health and Strava import paths. Other providers do not yet take the shared import lock.
 
+## Detailed activity reads and original laps
+
+MCP `get_activity_streams` exposes bounded original time-aligned samples;
+`get_activity` also returns a bounded sample page for older eventId-only clients.
+Full recordings remain paginated. Provider lap provenance is stored through the
+additive `20261030120000_activity_segment_provider_identity` migration.
+New native Strava imports request original laps. Explicit athlete-scoped repair
+can append missing original identities without replacing legacy/manual segments,
+notes, summaries or streams. It is not a general historical backfill. Source UTC
+clocks/durations and original index references are retained without inferring
+workout steps or forcing index alignment. Strava token expiry is recorded and
+normal renewal uses the existing grant and scopes. See
+[the activity detail contract](doc/mcp-activity-details.md).
+
 ## Separate companion project
 
 The native iPhone app, Open Wearables gateway, account enrollment, history import, webhook handling and installation instructions live in [openathlete-wearables-bridge](https://github.com/ScottieNoy/openathlete-wearables-bridge/tree/feat/companion-app).

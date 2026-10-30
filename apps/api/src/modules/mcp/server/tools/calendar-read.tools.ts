@@ -54,6 +54,37 @@ const sessionOutput = z.object({
   doneActivity: calendarItemSchema.optional(),
 });
 
+const segmentTiming = z.object({
+  basis: z.literal('provider_start_date_and_elapsed_time'),
+  activityStartDate: z.string(),
+  startDate: z.string(),
+  elapsedSeconds: z.number(),
+  lapIndex: z.number(),
+  startIndex: z.number().nullable(),
+  endIndex: z.number().nullable(),
+});
+
+function segmentSource(
+  segment: {
+    sourceProvider: string | null;
+    sourceExternalId: string | null;
+    sourceData: unknown;
+    endTimeSeconds: number;
+  },
+  lastRecordedTime?: number,
+) {
+  if (!segment.sourceProvider || !segment.sourceExternalId) return undefined;
+  const timing = segmentTiming.safeParse(segment.sourceData);
+  return {
+    provider: segment.sourceProvider.toLowerCase(),
+    externalId: segment.sourceExternalId,
+    ...(timing.success && { timing: timing.data }),
+    ...(lastRecordedTime !== undefined && {
+      endWithinRecordedTimeRange: segment.endTimeSeconds <= lastRecordedTime,
+    }),
+  };
+}
+
 const activityOutput = z.object({
   activity: calendarItemSchema,
   laps: z
@@ -61,6 +92,17 @@ const activityOutput = z.object({
       z.object({
         segmentId: z.number(),
         orderIndex: z.number(),
+        source: z
+          .object({
+            provider: z.string(),
+            externalId: z.string(),
+            timing: segmentTiming.optional(),
+            endWithinRecordedTimeRange: z.boolean().optional(),
+          })
+          .optional()
+          .describe(
+            'Provider identity when recorded. A Strava lap is not necessarily a lap-button press or a structured workout step.',
+          ),
         startTimeSeconds: z
           .number()
           .describe('Seconds from activity start, inclusive'),
@@ -100,6 +142,9 @@ const activityOutput = z.object({
   }),
   streams: activityStreamAvailabilitySchema.describe(
     'Read values with get_activity_streams; missing means not stored, not omitted by this tool',
+  ),
+  timeSeries: activityStreamOutputSchema.describe(
+    'A bounded page of actual original samples. Defaults to the first 200 samples, even for clients whose cached input schema only supports eventId. Follow nextOffset using streamOffset or get_activity_streams after refreshing tool metadata.',
   ),
   feedback: z
     .array(z.object({ question: z.string(), answer: z.string() }))
@@ -288,16 +333,18 @@ export const registerCalendarReadTools: ToolRegistrar = (server, ctx, deps) => {
     {
       title: 'Activity details',
       description:
-        'One done activity: metrics, paginated stored laps/segments, stream availability, feedback and planned session. Use get_activity_streams for aligned time-series values. lapPage.total counts stored segments even on an empty page; stream availability is independent.',
+        'One done activity: metrics, original segment provenance, feedback and a bounded page of actual original samples in timeSeries (first 200 by default). For the complete recording use streamOffset or get_activity_streams and follow nextOffset. A default page is not the full workout. lapPage.total counts stored segments independently of stream availability.',
       inputSchema: {
         eventId: z.number().int().describe('eventId of the activity'),
         lapOffset: z.number().int().min(0).max(2147483647).default(0),
         lapLimit: z.number().int().min(1).max(100).default(100),
+        streamOffset: activityStreamInputSchema.shape.offset,
+        streamLimit: activityStreamInputSchema.shape.limit,
       },
       outputSchema: activityOutput,
       annotations: READ_ONLY,
     },
-    ({ eventId, lapOffset, lapLimit }) =>
+    ({ eventId, lapOffset, lapLimit, streamOffset, streamLimit }) =>
       run(activityOutput, async () => {
         const { scope, event, ability } = await readEvent(eventId);
         if (!event.activity) {
@@ -340,6 +387,15 @@ export const registerCalendarReadTools: ToolRegistrar = (server, ctx, deps) => {
             })
           : null;
         const sport = event.activity.sport;
+        const streams = inspectActivityStreams(details.stream);
+        const lastRecordedTime = streams.availability.totalSamples
+          ? streams.page({
+              eventId,
+              offset: streams.availability.totalSamples - 1,
+              limit: 1,
+              channels: ['distance'],
+            }).timeSeconds[0]
+          : undefined;
         return {
           activity: toCalendarItem(
             event,
@@ -347,7 +403,21 @@ export const registerCalendarReadTools: ToolRegistrar = (server, ctx, deps) => {
             scope.today,
             zoneNames,
           ),
-          streams: inspectActivityStreams(details.stream).availability,
+          streams: streams.availability,
+          timeSeries: streams.page({
+            eventId,
+            offset: streamOffset,
+            limit: streamLimit,
+            channels: [
+              'heartrate',
+              'distance',
+              'speed',
+              'pace',
+              'altitude',
+              'watts',
+              'gap',
+            ],
+          }),
           lapPage: {
             total: details._count.segments,
             offset: lapOffset,
@@ -358,6 +428,7 @@ export const registerCalendarReadTools: ToolRegistrar = (server, ctx, deps) => {
           },
           laps: details.segments.map((segment) => ({
             segmentId: segment.activitySegmentId,
+            source: segmentSource(segment, lastRecordedTime),
             orderIndex: segment.orderIndex,
             startTimeSeconds: segment.startTimeSeconds,
             endTimeSeconds: segment.endTimeSeconds,
