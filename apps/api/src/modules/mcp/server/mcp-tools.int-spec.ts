@@ -137,6 +137,7 @@ describe('MCP tools (PostgreSQL)', () => {
       (tool) => tool.name,
     );
     expect(names).toContain('get_calendar');
+    expect(names).toContain('get_activity_streams');
     expect(names).not.toContain('plan_sessions');
 
     const writer = await connect(athlete);
@@ -168,6 +169,140 @@ describe('MCP tools (PostgreSQL)', () => {
         ].includes(tool.name),
       );
     }
+  });
+
+  it('reads original streams independently of laps, paginates segments and enforces athlete access', async () => {
+    const { call, client } = await connect(athlete, ['read']);
+    const withoutStreams = data<{
+      laps: unknown[];
+      streams: { timeStatus: string; stored: boolean };
+    }>(await call('get_activity', { eventId: 3002 }));
+    expect(withoutStreams.laps).toHaveLength(1);
+    expect(withoutStreams.streams).toMatchObject({
+      timeStatus: 'missing',
+      stored: false,
+    });
+    await prisma.eventActivity.update({
+      where: { eventId: 3002 },
+      data: {
+        stream: {
+          time: [0, 2, 7, 9],
+          distance: [0, 8, 18, 18],
+          heartrate: [100, 110, 120, 125],
+        },
+      },
+    });
+    await prisma.activitySegment.deleteMany({
+      where: { eventActivity: { eventId: 3002 } },
+    });
+    const summary = data<{
+      laps: unknown[];
+      streams: { totalSamples: number };
+    }>(await call('get_activity', { eventId: 3002 }));
+    expect(summary.laps).toEqual([]);
+    expect(summary.streams.totalSamples).toBe(4);
+    const detail = data<{
+      timeSeconds: number[];
+      series: { channel: string; values: unknown[] }[];
+      nextOffset: number | null;
+    }>(
+      await call('get_activity_streams', {
+        eventId: 3002,
+        offset: 2,
+        limit: 2,
+      }),
+    );
+    expect(detail.timeSeconds).toEqual([7, 9]);
+    expect(detail.series.find((s) => s.channel === 'pace')?.values).toEqual([
+      500,
+      null,
+    ]);
+    expect(detail.nextOffset).toBeNull();
+    expect(
+      errorOf(await call('get_activity_streams', { eventId: 3001 })),
+    ).toContain('not an activity');
+    expect(
+      errorOf(
+        await call('get_activity_streams', { eventId: 3002, limit: 501 }),
+      ),
+    ).toContain('500');
+
+    const activity = await prisma.eventActivity.findUniqueOrThrow({
+      where: { eventId: 3002 },
+    });
+    await prisma.activitySegment.createMany({
+      data: Array.from({ length: 101 }, (_, i) => ({
+        eventActivityId: activity.eventActivityId,
+        segmentType: 'LAP' as const,
+        orderIndex: i,
+        startTimeSeconds: i * 60,
+        endTimeSeconds: (i + 1) * 60,
+        distance: 0,
+        averageWatts: 0,
+        averageHeartrate: 0,
+      })),
+    });
+    const laps = data<{
+      laps: Record<string, unknown>[];
+      lapPage: Record<string, unknown>;
+    }>(await call('get_activity', { eventId: 3002 }));
+    expect(laps.laps).toHaveLength(100);
+    expect(laps.lapPage).toEqual({ total: 101, offset: 0, nextOffset: 100 });
+    expect(laps.laps[0]).toMatchObject({
+      type: 'lap',
+      startTimeSeconds: 0,
+      endTimeSeconds: 60,
+      elapsedSeconds: 60,
+      minutes: 1,
+      distanceKm: 0,
+      avgPower: 0,
+      avgHeartRate: 0,
+    });
+    const last = data<{
+      laps: Record<string, unknown>[];
+      lapPage: Record<string, unknown>;
+    }>(await call('get_activity', { eventId: 3002, lapOffset: 100 }));
+    expect(last.laps).toHaveLength(1);
+    expect(last.lapPage.nextOffset).toBeNull();
+
+    const coach = await connect(
+      {
+        userId: COACH_USER_ID,
+        email: 'coach@example.com',
+        athlete: { athleteId: COACH_ATHLETE_ID },
+        coachAthletes: [{ athleteId: DELETED_ATHLETE_ID }],
+      } as AuthUser,
+      ['read'],
+    );
+    expect(
+      data(await coach.call('get_activity_streams', { eventId: 3002 }))
+        .returnedSamples,
+    ).toBe(4);
+    const stranger = await connect(
+      {
+        userId: STRANGER_USER_ID,
+        email: 'stranger@example.com',
+        athlete: { athleteId: STRANGER_ATHLETE_ID },
+        coachAthletes: [],
+      } as unknown as AuthUser,
+      ['read'],
+    );
+    expect(
+      errorOf(await stranger.call('get_activity_streams', { eventId: 3002 })),
+    ).toContain('not found');
+    expect(
+      errorOf(await stranger.call('get_activity', { eventId: 3002 })),
+    ).toContain('not found');
+    const writer = await connect(athlete, ['write']);
+    expect(
+      (await writer.client.listTools()).tools.map((t) => t.name),
+    ).not.toContain('get_activity_streams');
+    await Promise.all([
+      client.close(),
+      coach.client.close(),
+      stranger.client.close(),
+      writer.client.close(),
+    ]);
   });
 
   it('plans sessions at local times, with their structured workouts', async () => {
