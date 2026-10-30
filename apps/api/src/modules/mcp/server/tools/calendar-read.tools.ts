@@ -1,10 +1,16 @@
 import { z } from 'zod';
 
 import { Prisma, SportType } from '@openathlete/database';
+import {
+  activityStreamAvailabilitySchema,
+  activityStreamInputSchema,
+  activityStreamOutputSchema,
+} from '@openathlete/shared';
 
 import { zonedClock } from 'src/common/utils/time-zone';
 import { accessibleBy } from 'src/modules/auth/services/casl-prisma';
 
+import { inspectActivityStreams } from '../activity-streams';
 import { ToolError, athleteIdInput, run } from '../context';
 import { localDate, localRange } from '../dates';
 import {
@@ -53,17 +59,48 @@ const activityOutput = z.object({
   laps: z
     .array(
       z.object({
+        segmentId: z.number(),
+        orderIndex: z.number(),
+        startTimeSeconds: z
+          .number()
+          .describe('Seconds from activity start, inclusive'),
+        endTimeSeconds: z
+          .number()
+          .describe(
+            'Seconds from activity start; exclusive except the final segment may include its endpoint',
+          ),
+        elapsedSeconds: z.number(),
+        movingSeconds: z.number().optional(),
         name: z.string().optional(),
         type: z.string(),
         minutes: z.number(),
         distanceKm: z.number().optional(),
         avgHeartRate: z.number().optional(),
         avgPower: z.number().optional(),
+        maxHeartRate: z.number().optional().describe('bpm'),
+        avgCadence: z
+          .number()
+          .optional()
+          .describe(
+            'Provider-recorded revolutions or steps per minute; no running cadence doubling',
+          ),
+        avgSpeedMetersPerSecond: z.number().optional(),
+        avgPaceSecondsPerKm: z.number().optional(),
         avgPace: z.string().optional(),
         avgSpeedKmh: z.number().optional(),
       }),
     )
-    .describe('Laps or detected workout steps'),
+    .describe(
+      'Stored segments of their stated type; an empty array does not mean streams are missing. minutes uses moving time when stored, otherwise elapsed time.',
+    ),
+  lapPage: z.object({
+    total: z.number(),
+    offset: z.number(),
+    nextOffset: z.number().nullable(),
+  }),
+  streams: activityStreamAvailabilitySchema.describe(
+    'Read values with get_activity_streams; missing means not stored, not omitted by this tool',
+  ),
   feedback: z
     .array(z.object({ question: z.string(), answer: z.string() }))
     .describe("The athlete's answers after the activity"),
@@ -251,14 +288,16 @@ export const registerCalendarReadTools: ToolRegistrar = (server, ctx, deps) => {
     {
       title: 'Activity details',
       description:
-        "One done activity in full: metrics, laps, the athlete's feedback answers (feelings, pain, notes) and the planned session it fulfilled.",
+        'One done activity: metrics, paginated stored laps/segments, stream availability, feedback and planned session. Use get_activity_streams for aligned time-series values. lapPage.total counts stored segments even on an empty page; stream availability is independent.',
       inputSchema: {
         eventId: z.number().int().describe('eventId of the activity'),
+        lapOffset: z.number().int().min(0).max(2147483647).default(0),
+        lapLimit: z.number().int().min(1).max(100).default(100),
       },
       outputSchema: activityOutput,
       annotations: READ_ONLY,
     },
-    ({ eventId }) =>
+    ({ eventId, lapOffset, lapLimit }) =>
       run(activityOutput, async () => {
         const { scope, event, ability } = await readEvent(eventId);
         if (!event.activity) {
@@ -270,7 +309,13 @@ export const registerCalendarReadTools: ToolRegistrar = (server, ctx, deps) => {
           prisma.eventActivity.findUniqueOrThrow({
             where: { eventActivityId: event.activity.eventActivityId },
             select: {
-              segments: { orderBy: { orderIndex: 'asc' } },
+              stream: true,
+              _count: { select: { segments: true } },
+              segments: {
+                orderBy: [{ orderIndex: 'asc' }, { activitySegmentId: 'asc' }],
+                skip: lapOffset,
+                take: lapLimit,
+              },
               feedbackQuestions: {
                 where: { answerText: { not: null } },
                 orderBy: { activityFeedbackQuestionId: 'asc' },
@@ -302,19 +347,53 @@ export const registerCalendarReadTools: ToolRegistrar = (server, ctx, deps) => {
             scope.today,
             zoneNames,
           ),
-          laps: details.segments.slice(0, 100).map((segment) => ({
+          streams: inspectActivityStreams(details.stream).availability,
+          lapPage: {
+            total: details._count.segments,
+            offset: lapOffset,
+            nextOffset:
+              lapOffset + details.segments.length < details._count.segments
+                ? lapOffset + details.segments.length
+                : null,
+          },
+          laps: details.segments.map((segment) => ({
+            segmentId: segment.activitySegmentId,
+            orderIndex: segment.orderIndex,
+            startTimeSeconds: segment.startTimeSeconds,
+            endTimeSeconds: segment.endTimeSeconds,
+            elapsedSeconds: segment.endTimeSeconds - segment.startTimeSeconds,
+            ...(segment.movingTime !== null && {
+              movingSeconds: segment.movingTime,
+            }),
             ...(segment.name && { name: segment.name }),
             type: segment.segmentType.toLowerCase(),
-            minutes: round((segment.movingTime ?? 0) / 60, 1),
-            ...(segment.distance && {
+            minutes: round(
+              (segment.movingTime ??
+                segment.endTimeSeconds - segment.startTimeSeconds) / 60,
+              1,
+            ),
+            ...(segment.distance !== null && {
               distanceKm: round(segment.distance / 1000, 2),
             }),
-            ...(segment.averageHeartrate && {
+            ...(segment.averageHeartrate !== null && {
               avgHeartRate: round(segment.averageHeartrate),
             }),
-            ...(segment.averageWatts && {
+            ...(segment.averageWatts !== null && {
               avgPower: round(segment.averageWatts),
             }),
+            ...(segment.maxHeartrate !== null && {
+              maxHeartRate: segment.maxHeartrate,
+            }),
+            ...(segment.averageCadence !== null && {
+              avgCadence: segment.averageCadence,
+            }),
+            ...(segment.averageSpeed !== null && {
+              avgSpeedMetersPerSecond: segment.averageSpeed,
+            }),
+            ...(segment.averageSpeed !== null &&
+              segment.averageSpeed > 0 && {
+                avgPaceSecondsPerKm: 1000 / segment.averageSpeed,
+              }),
             ...(segment.averageSpeed
               ? speedFields(sport, segment.averageSpeed)
               : {}),
@@ -332,6 +411,33 @@ export const registerCalendarReadTools: ToolRegistrar = (server, ctx, deps) => {
             ),
           }),
         };
+      }),
+  );
+
+  registerTool(
+    server,
+    'get_activity_streams',
+    {
+      title: 'Activity time series',
+      description:
+        'Original time-aligned samples for one activity, at most 500 per page. Follow nextOffset until null for the full recording. Availability lists missing, invalid and misaligned channels separately; unavailable channels have no values. Time is elapsed seconds, distance meters, heart rate bpm, speed m/s, pace s/km. Speed and pace are derived from consecutive original distance/time samples, including pauses; first pace, stationary pace, duplicate timestamps and distance resets yield null. GAP and normalized speed are stored m/s channels. No GPS coordinates are returned. Does not fetch or repair provider data.',
+      inputSchema: activityStreamInputSchema.shape,
+      outputSchema: activityStreamOutputSchema,
+      annotations: READ_ONLY,
+    },
+    (input) =>
+      run(activityStreamOutputSchema, async () => {
+        const { event } = await readEvent(input.eventId);
+        if (!event.activity) {
+          throw new ToolError(
+            `Event ${input.eventId} is not an activity: use get_session for planned sessions.`,
+          );
+        }
+        const details = await prisma.eventActivity.findUniqueOrThrow({
+          where: { eventActivityId: event.activity.eventActivityId },
+          select: { stream: true },
+        });
+        return inspectActivityStreams(details.stream).page(input);
       }),
   );
 
