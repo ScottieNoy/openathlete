@@ -43,6 +43,11 @@ import {
   ProviderImportCapability,
 } from '../base/provider-import.interface';
 import { providerRedirectUri } from '../base/provider-urls';
+import {
+  StravaLapSource,
+  appendOriginalStravaLaps,
+  originalStravaLaps,
+} from '../base/strava-laps';
 import { saveImportedWorkout } from '../base/workout-deduplication';
 
 @Injectable()
@@ -134,42 +139,57 @@ export class StravaProviderService
     }
   }
 
-  /**
-   * Strava-specific: Override getValidAccessToken (Strava doesn't provide expires_in)
-   */
+  /** Strava access tokens are short lived; legacy null expiries must be renewed. */
   override async getValidAccessToken(
     account: ProviderAccount,
   ): Promise<string> {
-    // Strava access tokens don't expire (or expire very rarely)
-    // So we can use stored token if it exists
-    if (account.accessToken) {
+    if (account.status !== 'active') return super.getValidAccessToken(account);
+    if (
+      account.accessToken &&
+      account.expiresAt &&
+      account.expiresAt.getTime() > Date.now() + 30000
+    )
       return account.accessToken;
-    }
+    return this.refreshAndSaveAccessToken(account);
+  }
 
-    // Otherwise refresh (will generate new access token)
-    if (!account.refreshToken) {
+  private async refreshAndSaveAccessToken(
+    account: ProviderAccount,
+  ): Promise<string> {
+    if (!account.refreshToken)
       throw new Error('No refresh token available for Strava');
-    }
-
-    this.logger.debug(
-      `Refreshing Strava access token for athlete ${account.athleteId}`,
-    );
-
     const tokenResponse = await this.refreshAccessToken(account.refreshToken);
-
-    // Strava doesn't provide expires_in, so we set expires_at to null
-    await this.prisma.providerAccount.update({
+    const absolute = (
+      tokenResponse as OAuthTokenResponse & { expires_at?: number }
+    ).expires_at;
+    const expiresAt =
+      typeof absolute === 'number' && Number.isFinite(absolute)
+        ? new Date(absolute * 1000)
+        : typeof tokenResponse.expires_in === 'number' &&
+            Number.isFinite(tokenResponse.expires_in)
+          ? new Date(Date.now() + tokenResponse.expires_in * 1000)
+          : null;
+    if (
+      !expiresAt ||
+      !Number.isFinite(expiresAt.getTime()) ||
+      expiresAt.getTime() <= Date.now() ||
+      !tokenResponse.access_token
+    )
+      throw new Error('Invalid Strava token expiry');
+    const updated = await this.prisma.providerAccount.update({
       where: {
         providerAccountId: account.providerAccountId,
+        athleteId: account.athleteId,
+        status: 'active',
       },
       data: {
         accessToken: tokenResponse.access_token,
         refreshToken: tokenResponse.refresh_token ?? account.refreshToken,
-        expiresAt: null, // Strava tokens don't expire
+        expiresAt,
       },
     });
-
-    return tokenResponse.access_token;
+    Object.assign(account, updated);
+    return updated.accessToken;
   }
 
   /**
@@ -197,30 +217,7 @@ export class StravaProviderService
           `Access token invalid for Strava account ${account.providerAccountId}, refreshing...`,
         );
 
-        // Refresh the token
-        const tokenResponse = await this.refreshAccessToken(
-          account.refreshToken,
-        );
-
-        // Update the account in database
-        const updatedAccount = await this.prisma.providerAccount.update({
-          where: {
-            providerAccountId: account.providerAccountId,
-          },
-          data: {
-            accessToken: tokenResponse.access_token,
-            refreshToken: tokenResponse.refresh_token ?? account.refreshToken,
-            expiresAt: null, // Strava tokens don't expire
-          },
-        });
-
-        // Update the account object for potential retry and subsequent calls
-        account.accessToken = updatedAccount.accessToken;
-        account.refreshToken = updatedAccount.refreshToken;
-        account.expiresAt = updatedAccount.expiresAt;
-
-        // Retry the request with the new token
-        accessToken = tokenResponse.access_token;
+        accessToken = await this.refreshAndSaveAccessToken(account);
         return await requestFn(accessToken);
       }
 
@@ -445,6 +442,22 @@ export class StravaProviderService
       );
     }
 
+    let segments: ReturnType<typeof originalStravaLaps> = [];
+    try {
+      segments = originalStravaLaps(
+        {
+          id: String(activity.id),
+          startDate: new Date(activity.start_date),
+          elapsedSeconds: activity.elapsed_time,
+          athleteId: account.externalUserId,
+        },
+        await this.fetchOriginalLaps(account, String(activity.id)),
+      );
+    } catch {
+      this.logger.warn(
+        `Original Strava laps unavailable for activity ${activity.id}; activity streams and summary retained`,
+      );
+    }
     const sport = stravaActivitySport(activity);
 
     return {
@@ -463,8 +476,77 @@ export class StravaProviderService
       kilojoules: roundEnergy(activity.kilojoules),
       sport,
       stream: compressedActivityStream as object,
+      segments: { create: segments },
       externalId: stravaStorageId(account.athleteId, activity.id.toString()),
     };
+  }
+
+  private fetchOriginalLaps(
+    account: ProviderAccount,
+    sourceId: string,
+  ): Promise<unknown> {
+    return this.makeAuthenticatedRequest(account, async (token) => {
+      const response = await axios.get(
+        this.getStravaActivityUrl(sourceId) + '/laps',
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: 30000,
+        },
+      );
+      return response.data;
+    });
+  }
+
+  /** Explicit, targeted enrichment; ordinary duplicate imports keep their existing content. */
+  async importOriginalLaps(account: ProviderAccount, eventId: number) {
+    const activity = await this.prisma.eventActivity.findFirstOrThrow({
+      where: { eventId, event: { athleteId: account.athleteId } },
+      include: {
+        sources: {
+          where: { athleteId: account.athleteId, provider: 'STRAVA' },
+        },
+      },
+    });
+    const primary =
+      activity.provider === 'STRAVA'
+        ? providerActivityId('STRAVA', activity.externalId)
+        : undefined;
+    const ids = [
+      ...new Set([
+        ...activity.sources.map((s) => s.externalId),
+        ...(primary ? [primary] : []),
+      ]),
+    ];
+    if (ids.length !== 1 || !this.tryNormalizeStravaActivityId(ids[0]))
+      throw new Error('No unique Strava source for this activity');
+    const detail = await this.makeAuthenticatedRequest<StravaSummaryActivity>(
+      account,
+      async (token) =>
+        (
+          await axios.get<StravaSummaryActivity>(
+            this.getStravaActivityUrl(ids[0]),
+            { headers: { Authorization: `Bearer ${token}` }, timeout: 30000 },
+          )
+        ).data,
+    );
+    if (
+      String(detail.id) !== ids[0] ||
+      (account.externalUserId &&
+        String(detail.athlete?.id) !== account.externalUserId)
+    )
+      throw new Error('Strava source activity mismatch');
+    const source: StravaLapSource = {
+      id: ids[0],
+      startDate: new Date(detail.start_date),
+      elapsedSeconds: detail.elapsed_time,
+      athleteId: account.externalUserId,
+    };
+    return appendOriginalStravaLaps(this.prisma, {
+      athleteId: account.athleteId,
+      eventActivityId: activity.eventActivityId,
+      source,
+      laps: await this.fetchOriginalLaps(account, ids[0]),
+    });
   }
 
   /**

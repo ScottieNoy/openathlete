@@ -138,6 +138,7 @@ describe('MCP tools (PostgreSQL)', () => {
     );
     expect(names).toContain('get_calendar');
     expect(names).toContain('get_activity_streams');
+    expect(reader.client.getServerVersion()?.version).toBe('1.1.0');
     expect(names).not.toContain('plan_sessions');
 
     const writer = await connect(athlete);
@@ -198,9 +199,29 @@ describe('MCP tools (PostgreSQL)', () => {
     const summary = data<{
       laps: unknown[];
       streams: { totalSamples: number };
+      timeSeries: {
+        timeSeconds: number[];
+        series: { channel: string; values: unknown[] }[];
+      };
     }>(await call('get_activity', { eventId: 3002 }));
     expect(summary.laps).toEqual([]);
     expect(summary.streams.totalSamples).toBe(4);
+    // eventId alone remains useful for ChatGPT clients with the old cached input definition.
+    expect(summary.timeSeries.timeSeconds).toEqual([0, 2, 7, 9]);
+    expect(
+      summary.timeSeries.series.find((s) => s.channel === 'heartrate')?.values,
+    ).toEqual([100, 110, 120, 125]);
+    const viaExisting = data<{
+      timeSeries: { timeSeconds: number[]; nextOffset: number | null };
+    }>(
+      await call('get_activity', {
+        eventId: 3002,
+        streamOffset: 2,
+        streamLimit: 2,
+      }),
+    );
+    expect(viaExisting.timeSeries.timeSeconds).toEqual([7, 9]);
+    expect(viaExisting.timeSeries.nextOffset).toBeNull();
     const detail = data<{
       timeSeconds: number[];
       series: { channel: string; values: unknown[] }[];
@@ -240,6 +261,19 @@ describe('MCP tools (PostgreSQL)', () => {
         distance: 0,
         averageWatts: 0,
         averageHeartrate: 0,
+        ...(i === 0 && {
+          sourceProvider: 'STRAVA' as const,
+          sourceExternalId: 'fixture-original-lap',
+          sourceData: {
+            basis: 'provider_start_date_and_elapsed_time',
+            activityStartDate: '2026-01-06T00:00:00Z',
+            startDate: '2026-01-06T00:00:00Z',
+            elapsedSeconds: 60,
+            lapIndex: 0,
+            startIndex: 0,
+            endIndex: 10,
+          },
+        }),
       })),
     });
     const laps = data<{
@@ -257,6 +291,16 @@ describe('MCP tools (PostgreSQL)', () => {
       distanceKm: 0,
       avgPower: 0,
       avgHeartRate: 0,
+      source: {
+        provider: 'strava',
+        externalId: 'fixture-original-lap',
+        endWithinRecordedTimeRange: false,
+        timing: {
+          basis: 'provider_start_date_and_elapsed_time',
+          elapsedSeconds: 60,
+          lapIndex: 0,
+        },
+      },
     });
     const last = data<{
       laps: Record<string, unknown>[];
