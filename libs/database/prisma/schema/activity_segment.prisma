@@ -20,6 +20,11 @@ model ActivitySegment {
   name                   String?
   /// Position in the activity sequence (0-based)
   orderIndex             Int                 @map("order_index")
+  /// Original provider identity; null for legacy, manual and inferred segments.
+  sourceProvider         ConnectorProvider?  @map("source_provider")
+  sourceExternalId       String?             @map("source_external_id")
+  /// Validated original timing metadata; never used to invent missing samples.
+  sourceData             Json?               @map("source_data")
   /// Inclusive start time in seconds from activity start
   startTimeSeconds       Int                 @map("start_time_seconds")
   /// Exclusive end time in seconds from activity start (inclusive for last segment)
@@ -64,6 +69,7 @@ model ActivitySegment {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@index([eventActivityId, orderIndex])
+  @@unique([eventActivityId, sourceProvider, sourceExternalId], map: "activity_segment_provider_identity_key")
   @@index([workoutStepId])
   @@map("activity_segment")
 }

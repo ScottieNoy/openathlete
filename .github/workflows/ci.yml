@@ -1,10 +1,11 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, deployment/companion]
   pull_request:
-    branches: [main]
+    branches: [main, deployment/companion]
 
 permissions:
   contents: read
@@ -56,7 +57,7 @@ jobs:
           POSTGRES_USER: oa
           POSTGRES_PASSWORD: oa
           POSTGRES_DB: oa
-        ports: ['5432:5432']
+        ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U oa -d oa"
           --health-interval 5s --health-timeout 5s --health-retries 10
@@ -81,8 +82,8 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
-          node-version-file: '.nvmrc'
-          cache: 'pnpm'
+          node-version-file: ".nvmrc"
+          cache: "pnpm"
           cache-dependency-path: apps/docs/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm types:check
@@ -123,8 +124,8 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
-          node-version-file: '.nvmrc'
-          cache: 'pnpm'
+          node-version-file: ".nvmrc"
+          cache: "pnpm"
       - run: pnpm install --frozen-lockfile --filter @openathlete/e2e...
       - run: pnpm e2e exec playwright install --with-deps chromium
 
@@ -156,3 +157,70 @@ jobs:
       - name: Test AI agents against a fake OpenAI API
         if: matrix.app == 'api'
         run: pnpm api test:agents
+
+  required:
+    name: Required checks
+    if: always()
+    needs: [lint, type-check, test, integration, docs, e2e, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every validation job to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: jq -e 'all(.[]; .result == "success")' <<< "$RESULTS"
+
+  publish:
+    name: Publish checked ${{ matrix.image }} image
+    needs: required
+    if: github.repository == 'ScottieNoy/openathlete' && github.event_name == 'push' && github.ref == 'refs/heads/deployment/companion'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [api, web]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Set image reference
+        env:
+          OWNER: ${{ github.repository_owner }}
+          COMPONENT: ${{ matrix.image }}
+        run: echo "IMAGE=ghcr.io/${OWNER,,}/openathlete-${COMPONENT}" >> "$GITHUB_ENV"
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/${{ matrix.image }}/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=e2e-${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=e2e-${{ matrix.image }}
+      - name: Record immutable deployment reference
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          COMPONENT: ${{ matrix.image }}
+          REVISION: ${{ github.sha }}
+        run: |
+          jq -n --arg source "$REVISION" --arg image "$IMAGE@$DIGEST" \
+            '{source: $source, image: $image}' > "$RUNNER_TEMP/image-$COMPONENT.json"
+          printf '%s\n' "### $COMPONENT" "Source: \`$REVISION\`" "Image: \`$IMAGE@$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deployment-image-${{ matrix.image }}
+          path: ${{ runner.temp }}/image-${{ matrix.image }}.json
+          if-no-files-found: error
+          retention-days: 90

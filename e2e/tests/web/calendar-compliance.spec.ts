@@ -60,6 +60,10 @@ test('an activity dragged onto its planned session colours it as done', async ({
 
   // Raw mouse moves, in steps, as dnd-kit expects a real drag
   await page.waitForLoadState('networkidle');
+  // Later weeks can sit below the viewport even though the cards are visible
+  // in the DOM. Raw mouse coordinates do not auto-scroll like locator actions.
+  await sessionCard.scrollIntoViewIfNeeded();
+  await activityCard.scrollIntoViewIfNeeded();
   const from = (await activityCard.boundingBox())!;
   const to = (await sessionCard.boundingBox())!;
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);

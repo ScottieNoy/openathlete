@@ -1,5 +1,5 @@
 import { useGetUpcomingCompetitionsQuery } from '@/api/event';
-import { AthleteMetric, useGetMetricsQuery } from '@/api/metric';
+import { AthleteMetric, useGetLatestMetricsQuery } from '@/api/metric';
 import { useTrainingLoadMetrics } from '@/api/training-load';
 import { TrainingLoadCalculationType } from '@/api/training-load/training-load.api';
 import { CompetitionPriorityBadge } from '@/components/calendar/competition-priority-badge';
@@ -50,13 +50,14 @@ export function AthleteDashboardHeader({
   const { data: trainingLoadMetrics, isLoading: isLoadingTrainingLoad } =
     useTrainingLoadMetrics(TrainingLoadCalculationType.TRIMP, today, athleteId);
 
-  // Get all metrics to find recent updates
-  const { data: allMetrics = [], isLoading: isLoadingMetrics } =
-    useGetMetricsQuery(undefined, athleteId);
+  // Fetch one latest observation per type, rather than the full history.
+  const { data: latestMetrics = {}, isLoading: isLoadingMetrics } =
+    useGetLatestMetricsQuery(athleteId);
 
   // Get 2-3 most recent metrics with different types
   const recentMetrics = useMemo(() => {
-    if (!allMetrics || allMetrics.length === 0) return [];
+    const allMetrics = Object.values(latestMetrics);
+    if (allMetrics.length === 0) return [];
 
     // Sort by updatedAt descending
     const sorted = [...allMetrics].sort(
@@ -77,7 +78,7 @@ export function AthleteDashboardHeader({
     }
 
     return result;
-  }, [allMetrics]);
+  }, [latestMetrics]);
 
   const getDaysUntil = (date: Date): string => {
     const now = new Date();

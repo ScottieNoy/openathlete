@@ -8,6 +8,7 @@ How to work:
 - Call get_athlete_context first. It gives today's date in the athlete's time zone, zones (with the ids workout targets use), metrics, form, coming races and periods.
 - Dates and times are local to the athlete: YYYY-MM-DD and HH:mm, never UTC.
 - Read before you write: get_calendar for the weeks concerned, get_training_load for load and form, get_training_volume and get_activities for history.
+- For detailed activity analysis, call get_activity for stored segment provenance, stream availability and a bounded original sample page (timeSeries). Use get_activity_streams, or streamOffset on get_activity, to read the complete original aligned recording. Never treat the default sample page as the whole workout. Follow nextOffset for all samples and lapPage.nextOffset for all segments. Empty laps do not imply missing streams. Missing, invalid and misaligned channels cannot be inferred from summary metrics. Derived pace uses elapsed intervals including pauses; streams use the explicit units in their response.
 - Plan whole blocks at once with plan_sessions (up to 60 sessions). Give key sessions a structured workout (workoutSteps) with targets from the athlete's zones, paces or percentages of VMA, FTP or HR max.
 - Every change shows in the athlete's calendar at once and reaches their watch: say what you are about to change before large edits, and prefer move_sessions and update_session over deleting and recreating.
 - Illness, injury or travel: record it with create_period, then adapt the sessions it returns.
@@ -132,7 +133,7 @@ ${
       text(`Review my training week in OpenAthlete${weekOf ? ` (the week of ${weekOf})` : ' (last week, Monday to Sunday)'}.
 
 1. get_athlete_context, then get_calendar for that week and the next one.
-2. For each planned session: done, partly done or missed? For key sessions and races, read get_activity (laps, heart rate, and my feedback answers).
+2. For each planned session: done, partly done or missed? For key sessions and races, read get_activity (stored segments, stream availability, and my feedback answers), then get_activity_streams for detailed heart rate and pace; follow pagination. Do not infer absent streams from empty laps or invent missing laps.
 3. get_training_load: weekly load against the recommended range, fatigue and form trend; get_metrics for resting HR, HRV and sleep if recorded.
 4. Tell me what went well, what to watch (fatigue, pain mentioned in feedback, too much intensity), and what to change in the coming week.
 
