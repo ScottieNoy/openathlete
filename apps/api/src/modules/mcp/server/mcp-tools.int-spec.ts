@@ -269,6 +269,8 @@ describe('MCP tools (PostgreSQL)', () => {
             activityStartDate: '2026-01-06T00:00:00Z',
             startDate: '2026-01-06T00:00:00Z',
             elapsedSeconds: 60,
+            movingTimeSeconds: 61,
+            movingTimeExceedsElapsedTime: true,
             lapIndex: 0,
             startIndex: 0,
             endIndex: 10,
@@ -298,6 +300,8 @@ describe('MCP tools (PostgreSQL)', () => {
         timing: {
           basis: 'provider_start_date_and_elapsed_time',
           elapsedSeconds: 60,
+          movingTimeSeconds: 61,
+          movingTimeExceedsElapsedTime: true,
           lapIndex: 0,
         },
       },

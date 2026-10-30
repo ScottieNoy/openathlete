@@ -17,7 +17,7 @@ const lapSchema = z.object({
   name: z.string().max(1000).optional(),
   start_date: z.string().datetime({ offset: true }),
   elapsed_time: z.number().int().nonnegative().max(2147483647),
-  moving_time: z.number().int().nonnegative().nullish(),
+  moving_time: z.number().int().nonnegative().max(2147483647).nullish(),
   distance: metric,
   total_elevation_gain: metric,
   average_speed: metric,
@@ -64,7 +64,6 @@ export function originalStravaLaps(source: StravaLapSource, value: unknown) {
         start < 0 ||
         start > source.elapsedSeconds + 1 ||
         end > 2147483647 ||
-        (lap.moving_time != null && lap.moving_time > lap.elapsed_time) ||
         identities.has(lap.id) ||
         orders.has(lap.lap_index)
       ) {
@@ -81,6 +80,9 @@ export function originalStravaLaps(source: StravaLapSource, value: unknown) {
           activityStartDate: source.startDate.toISOString(),
           startDate: lap.start_date,
           elapsedSeconds: lap.elapsed_time,
+          movingTimeSeconds: lap.moving_time ?? null,
+          movingTimeExceedsElapsedTime:
+            lap.moving_time != null && lap.moving_time > lap.elapsed_time,
           lapIndex: lap.lap_index,
           startIndex: lap.start_index ?? null,
           endIndex: lap.end_index ?? null,

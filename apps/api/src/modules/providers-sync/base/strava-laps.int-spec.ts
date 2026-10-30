@@ -27,6 +27,7 @@ const laps = [
     name: 'Original warmup lap',
     start_date: '2026-01-06T00:00:00Z',
     elapsed_time: 300,
+    moving_time: 301,
     average_heartrate: 130,
     distance: 1000,
   },
@@ -91,6 +92,14 @@ describe('Original Strava lap persistence (PostgreSQL)', () => {
     });
     expect((await appendOriginalStravaLaps(prisma, input())).imported).toBe(2);
     const first = await stored();
+    expect(first[0]).toMatchObject({
+      movingTime: 301,
+      endTimeSeconds: 300,
+      sourceData: {
+        movingTimeSeconds: 301,
+        movingTimeExceedsElapsedTime: true,
+      },
+    });
     expect(first[1]).toMatchObject({
       sourceProvider: 'STRAVA',
       sourceExternalId: '102',
