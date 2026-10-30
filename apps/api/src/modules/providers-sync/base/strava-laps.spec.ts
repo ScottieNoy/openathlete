@@ -91,13 +91,28 @@ describe('Original Strava lap mapping', () => {
       lapIndex: 0,
     });
   });
+  it('preserves inconsistent provider moving time and flags it without changing elapsed boundaries', () => {
+    const mapped = originalStravaLaps(source, [
+      { ...lap, moving_time: 301 },
+    ])[0];
+    expect(mapped).toMatchObject({
+      startTimeSeconds: 0,
+      endTimeSeconds: 300,
+      movingTime: 301,
+      sourceData: {
+        elapsedSeconds: 300,
+        movingTimeSeconds: 301,
+        movingTimeExceedsElapsedTime: true,
+      },
+    });
+  });
   it.each([
     { activity: { id: 124 } },
     { athlete: { id: 98 } },
     { start_date: '2026-01-01T09:59:59Z' },
     { start_date: '2026-01-01T10:00:00.500Z' },
     { start_date: '2026-01-01T10:21:00Z' },
-    { moving_time: 301 },
+    { moving_time: 2147483648 },
     { average_watts: NaN },
   ])(
     'rejects mismatched/malformed original data without partial mapping: %j',

@@ -59,6 +59,8 @@ const segmentTiming = z.object({
   activityStartDate: z.string(),
   startDate: z.string(),
   elapsedSeconds: z.number(),
+  movingTimeSeconds: z.number().nullable().optional(),
+  movingTimeExceedsElapsedTime: z.boolean().optional(),
   lapIndex: z.number(),
   startIndex: z.number().nullable(),
   endIndex: z.number().nullable(),

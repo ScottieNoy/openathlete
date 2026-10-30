@@ -94,6 +94,9 @@ and are not assumed to index an independently stored stream. Source lap clocks
 can disagree with the activity summary or extend beyond available recording time.
 Such original values are retained, with `endWithinRecordedTimeRange` reporting
 whether the endpoint is inside the available time axis; no tail samples are invented.
+Original moving time can also exceed elapsed time due to provider inconsistencies.
+Both values are retained, with `source.timing.movingTimeExceedsElapsedTime` making
+the discrepancy explicit. Boundaries continue to use original elapsed time.
 
 `StravaProviderService.importOriginalLaps(account,eventId)` is an explicit,
 operator-scoped repair path. It resolves the same athlete's durable Strava source,
