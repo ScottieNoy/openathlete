@@ -3,18 +3,24 @@ import { TokenType } from '@openathlete/database';
 import { passwordResetUrl } from 'src/modules/auth/helpers/password-reset-url';
 import { AccountDeletionService } from 'src/modules/auth/services/account-deletion.service';
 import { TokenService } from 'src/modules/auth/services/token.service';
+import { TrainingLoadService } from 'src/modules/core/services/training-load.service';
 import { PrismaService } from 'src/modules/prisma/services/prisma.service';
+
+import { backfillMissingTrimp } from './backfill-trimp';
 
 export const USAGE = `Usage: openathlete <command>
 
   list-users                  List the accounts of this instance
   reset-password <email>      Print a link to set a new password (valid 15 minutes)
-  delete-user <email> --yes   Delete an account and all its data, for good`;
+  delete-user <email> --yes   Delete an account and all its data, for good
+  backfill-trimp <email> [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--yes]
+                              Dry-run or add missing historical TRIMP entries`;
 
 export interface CliDeps {
   prisma: PrismaService;
   tokens: TokenService;
   accountDeletion: AccountDeletionService;
+  trainingLoad: TrainingLoadService;
   appUrl: string;
 }
 
@@ -84,6 +90,9 @@ export async function runCommand(
       out(passwordResetUrl(deps.appUrl, token.token));
       return 0;
     }
+
+    case 'backfill-trimp':
+      return backfillMissingTrimp(rest, deps, out);
 
     case 'delete-user': {
       const user = await findUser();
