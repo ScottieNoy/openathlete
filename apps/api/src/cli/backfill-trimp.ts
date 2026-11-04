@@ -1,5 +1,5 @@
-import { PrismaService } from 'src/modules/prisma/services/prisma.service';
 import { TrainingLoadService } from 'src/modules/core/services/training-load.service';
+import { PrismaService } from 'src/modules/prisma/services/prisma.service';
 
 /**
  * Repair missing historical TRIMP entries without touching any existing load,
@@ -36,7 +36,7 @@ export async function backfillMissingTrimp(
       apply = true;
     } else if (flag === '--from' || flag === '--to') {
       const date = flags[++i];
-      const parsed = date && new Date(`${date}T00:00:00.000Z`);
+      const parsed = date ? new Date(`${date}T00:00:00.000Z`) : null;
       if (
         !date ||
         !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
@@ -174,7 +174,9 @@ export async function backfillMissingTrimp(
       `${events.length} activities, ${events.length - pending.length} with existing TRIMP, ` +
       `${candidates.length} missing candidates, ${skippedNoHr} without HR data.`,
   );
-  out(`Using current HR_MAX ${hrMax.value}, HR_REST ${hrRest.value} (existing formula).`);
+  out(
+    `Using current HR_MAX ${hrMax.value}, HR_REST ${hrRest.value} (existing formula).`,
+  );
 
   if (!apply) {
     out('Dry run only. Add --yes to calculate missing entries.');
