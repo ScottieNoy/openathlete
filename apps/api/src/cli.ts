@@ -6,8 +6,10 @@ import { ApiEnvSchemaType } from '@openathlete/shared';
 
 import { CliDeps, runCommand } from './cli/commands';
 import { validateEnv } from './common/config/validate-env';
+import { CaslAbilityFactory } from './modules/auth/services/casl-ability.factory';
 import { AccountDeletionService } from './modules/auth/services/account-deletion.service';
 import { TokenService } from './modules/auth/services/token.service';
+import { TrainingLoadService } from './modules/core/services/training-load.service';
 import { PrismaService } from './modules/prisma/services/prisma.service';
 import { StripeService } from './modules/subscription/services/stripe.service';
 
@@ -25,6 +27,8 @@ import { StripeService } from './modules/subscription/services/stripe.service';
     TokenService,
     StripeService,
     AccountDeletionService,
+    CaslAbilityFactory,
+    TrainingLoadService,
   ],
 })
 class CliModule {}
@@ -38,6 +42,7 @@ async function main() {
     prisma: app.get(PrismaService),
     tokens: app.get(TokenService),
     accountDeletion: app.get(AccountDeletionService),
+    trainingLoad: app.get(TrainingLoadService),
     appUrl: app
       .get<ConfigService<ApiEnvSchemaType, true>>(ConfigService)
       .get('APP_URL'),
