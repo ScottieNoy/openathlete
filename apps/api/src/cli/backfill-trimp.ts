@@ -142,6 +142,9 @@ export async function backfillMissingTrimp(
       : Promise.resolve([]),
   ]);
   const existingIds = new Set(existingEntries.map((entry) => entry.activityId));
+  const existingCount = events.filter(
+    (event) => event.activity && existingIds.has(event.activity.eventActivityId),
+  ).length;
   const pending = events.filter(
     (event) => event.activity && !existingIds.has(event.activity.eventActivityId),
   );
@@ -171,7 +174,7 @@ export async function backfillMissingTrimp(
 
   out(
     `TRIMP backfill for ${user.email} (athlete ${athlete.athleteId}): ` +
-      `${events.length} activities, ${events.length - pending.length} with existing TRIMP, ` +
+      `${events.length} activities,  ${existingCount} with existing TRIMP, ` +
       `${candidates.length} missing candidates, ${skippedNoHr} without HR data.`,
   );
   out(
