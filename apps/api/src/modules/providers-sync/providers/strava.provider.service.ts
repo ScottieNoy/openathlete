@@ -50,6 +50,13 @@ import {
 } from '../base/strava-laps';
 import { saveImportedWorkout } from '../base/workout-deduplication';
 
+/** A source summary is not a stored time-aligned recording. */
+function hasRecordedTime(stream: unknown): boolean {
+  if (!stream || typeof stream !== 'object' || Array.isArray(stream)) return false;
+  const time = (stream as Record<string, unknown>).time;
+  return Array.isArray(time) && time.length > 0;
+}
+
 @Injectable()
 export class StravaProviderService
   extends BaseProviderService
@@ -352,7 +359,11 @@ export class StravaProviderService
         ],
       },
     });
-    if (existing) return { activity: existing, created: false };
+    if (existing) {
+      if (existing.provider === 'APPLE_HEALTH')
+        await this.enrichLinkedStravaRecording(account, activity, existing.eventActivityId);
+      return { activity: existing, created: false };
+    }
     // Fetch streams outside the transaction/athlete lock. Persistence checks
     // both provider identities and nearby recordings again under the lock.
     const data = await this.fetchStravaActivityData(
@@ -377,7 +388,93 @@ export class StravaProviderService
         activity: { create: data },
       },
     });
+    if (!result.created && result.activity.provider === 'APPLE_HEALTH')
+      await this.enrichLinkedStravaRecording(
+        account,
+        activity,
+        result.activity.eventActivityId,
+      );
     return result;
+  }
+
+  /**
+   * Fill only missing recording data on an existing Apple Health activity.
+   * Its original provider, summaries, notes, linked training and user edits
+   * are preserved. Strava source identity must already be linked by the
+   * deduplication transaction before any write.
+   */
+  private async enrichLinkedStravaRecording(
+    account: ProviderAccount,
+    activity: ImportedActivity,
+    eventActivityId: number,
+  ): Promise<void> {
+    // Manually entered Strava activities have no original watch recording.
+    if ((activity.raw as StravaSummaryActivity).manual) return;
+    const identity = {
+      athleteId: account.athleteId,
+      provider: 'STRAVA' as const,
+      externalId: activity.externalId,
+    };
+    const existing = await this.prisma.eventActivity.findFirst({
+      where: {
+        eventActivityId,
+        provider: 'APPLE_HEALTH',
+        event: { athleteId: account.athleteId },
+        sources: { some: identity },
+      },
+      select: {
+        eventId: true,
+        stream: true,
+        segments: { select: { sourceProvider: true } },
+      },
+    });
+    if (!existing) return;
+
+    const needsStream = !hasRecordedTime(existing.stream);
+    const needsLaps = !existing.segments.some(
+      (segment) => segment.sourceProvider === 'STRAVA',
+    );
+    if (!needsStream && !needsLaps) return;
+
+    // Fetch provider data outside the database lock, then fill only an empty
+    // stream under a row lock. Concurrent retries cannot overwrite each other.
+    if (needsStream) {
+      const data = await this.fetchStravaActivityData(
+        account,
+        activity.raw as StravaSummaryActivity,
+      );
+      if (hasRecordedTime(data.stream)) {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT event_activity_id FROM event_activity WHERE event_activity_id = ${eventActivityId} FOR UPDATE`;
+          const current = await tx.eventActivity.findFirst({
+            where: {
+              eventActivityId,
+              provider: 'APPLE_HEALTH',
+              event: { athleteId: account.athleteId },
+              sources: { some: identity },
+            },
+            select: { stream: true },
+          });
+          if (current && !hasRecordedTime(current.stream))
+            await tx.eventActivity.update({
+              where: { eventActivityId },
+              data: { stream: data.stream },
+            });
+        });
+      }
+    }
+
+    // The existing lap importer validates Strava ownership, source clocks and
+    // provider identities, and never rewrites unclassified/manual segments.
+    if (needsLaps) {
+      try {
+        await this.importOriginalLaps(account, existing.eventId);
+      } catch (error) {
+        this.logger.warn(
+          `Strava lap enrichment unavailable for activity ${eventActivityId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
   }
 
   /**
@@ -671,9 +768,38 @@ export class StravaProviderService
         provider: 'STRAVA',
         externalId: { in: activities.map((a) => a.externalId) },
       },
-      select: { externalId: true },
+      select: { externalId: true, eventActivityId: true },
     });
-    for (const source of sources) existingIdsSet.add(source.externalId);
+    // A linked Strava identity can still need its original recording. Do not
+    // suppress such activities from a manual full sync just because the Apple
+    // Health summary has already claimed the event.
+    const linkedHealth = sources.length
+      ? await this.prisma.eventActivity.findMany({
+          where: {
+            eventActivityId: { in: sources.map((s) => s.eventActivityId) },
+            provider: 'APPLE_HEALTH',
+            event: { athleteId: account.athleteId },
+          },
+          select: {
+            eventActivityId: true,
+            stream: true,
+            segments: { select: { sourceProvider: true } },
+          },
+        })
+      : [];
+    const needsEnrichment = new Set(
+      linkedHealth
+        .filter(
+          (item) =>
+            !hasRecordedTime(item.stream) ||
+            !item.segments.some((segment) => segment.sourceProvider === 'STRAVA'),
+        )
+        .map((item) => item.eventActivityId),
+    );
+    for (const source of sources) {
+      if (!needsEnrichment.has(source.eventActivityId))
+        existingIdsSet.add(source.externalId);
+    }
     await this.correctSports(
       existing.map((a) => ({
         ...a,

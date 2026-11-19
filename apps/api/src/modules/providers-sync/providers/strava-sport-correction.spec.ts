@@ -104,6 +104,60 @@ describe('Strava full import', () => {
     expect(prisma.eventActivity.updateMany).not.toHaveBeenCalled();
   });
 
+  it('requeues a linked Apple Health summary when Strava streams and laps are missing', async () => {
+    const { service, prisma, queue } = setup([]);
+    jest.spyOn(service, 'importActivities').mockResolvedValue([
+      fetched('123', SportType.RUNNING),
+    ]);
+    prisma.activityImportSource.findMany.mockResolvedValue([
+      { externalId: '123', eventActivityId: 80 },
+    ] as never);
+    prisma.eventActivity.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          eventActivityId: 80,
+          provider: ConnectorProvider.APPLE_HEALTH,
+          stream: {},
+          segments: [],
+        },
+      ] as never);
+
+    expect(await service.queueFullImport(account)).toEqual({
+      queuedActivities: 1,
+    });
+    expect(queue.addActivityImportJobs).toHaveBeenCalledWith(
+      account,
+      [expect.objectContaining({ externalId: '123' })],
+      true,
+    );
+  });
+
+  it('does not requeue a linked Apple Health activity once all Strava detail is present', async () => {
+    const { service, prisma, queue } = setup([]);
+    jest.spyOn(service, 'importActivities').mockResolvedValue([
+      fetched('123', SportType.RUNNING),
+    ]);
+    prisma.activityImportSource.findMany.mockResolvedValue([
+      { externalId: '123', eventActivityId: 80 },
+    ] as never);
+    prisma.eventActivity.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          eventActivityId: 80,
+          provider: ConnectorProvider.APPLE_HEALTH,
+          stream: { time: [0, 1] },
+          segments: [{ sourceProvider: 'STRAVA' }],
+        },
+      ] as never);
+
+    expect(await service.queueFullImport(account)).toEqual({
+      queuedActivities: 0,
+    });
+    expect(queue.addActivityImportJobs).not.toHaveBeenCalled();
+  });
+
   it('recognizes namespaced storage IDs for history suppression and sport correction', async () => {
     const { service, prisma, queue } = setup([
       {
