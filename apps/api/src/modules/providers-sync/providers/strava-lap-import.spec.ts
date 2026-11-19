@@ -122,6 +122,55 @@ describe('Strava original-lap import wiring', () => {
     expect(saved.stream.time).toBeDefined();
     expect(saved.segments.create).toEqual([]);
   });
+  it('enriches a linked Apple Health summary with missing Strava streams and laps', async () => {
+    const { prisma, tx, service, request } = setup();
+    const health = {
+      eventActivityId: 80,
+      eventId: 90,
+      provider: 'APPLE_HEALTH',
+      stream: {},
+      segments: [],
+    };
+    prisma.eventActivity.findFirst.mockResolvedValue(health as never);
+    tx.eventActivity.findFirst.mockResolvedValue({ stream: {} } as never);
+    (tx.eventActivity as { update?: jest.Mock }).update = jest
+      .fn()
+      .mockResolvedValue({});
+    const laps = jest
+      .spyOn(service, 'importOriginalLaps')
+      .mockResolvedValue({ imported: 1, protectedExistingSegments: false });
+
+    const result = await service.importActivity(account, incoming);
+    expect(result).toMatchObject({ created: false, activity: health });
+    expect(tx.event.create).not.toHaveBeenCalled();
+    expect(tx.eventActivity.update).toHaveBeenCalledTimes(1);
+    expect(tx.eventActivity.update).toHaveBeenCalledWith({
+      where: { eventActivityId: 80 },
+      data: { stream: expect.objectContaining({ time: expect.any(Array) }) },
+    });
+    expect(laps).toHaveBeenCalledWith(account, 90);
+    expect(request.mock.calls.map(([url]) => url)).toContain(
+      'https://www.strava.com/api/v3/activities/123/streams',
+    );
+  });
+
+  it('preserves an existing detailed recording rather than overwriting it', async () => {
+    const { prisma, tx, service, request } = setup();
+    prisma.eventActivity.findFirst.mockResolvedValue({
+      eventActivityId: 80,
+      eventId: 90,
+      provider: 'APPLE_HEALTH',
+      stream: { time: [0, 1, 2] },
+      segments: [{ sourceProvider: 'STRAVA' }],
+    } as never);
+    expect((await service.importActivity(account, incoming)).created).toBe(
+      false,
+    );
+    expect(request).not.toHaveBeenCalled();
+    expect(tx.event.create).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it('does not turn ordinary duplicate imports into a history backfill or overwrite user data', async () => {
     const { tx, prisma, service, request } = setup();
     prisma.eventActivity.findFirst.mockResolvedValue({
