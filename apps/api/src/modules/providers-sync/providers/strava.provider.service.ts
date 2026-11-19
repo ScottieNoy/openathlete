@@ -408,6 +408,8 @@ export class StravaProviderService
     activity: ImportedActivity,
     eventActivityId: number,
   ): Promise<void> {
+    // Manually entered Strava activities have no original watch recording.
+    if ((activity.raw as StravaSummaryActivity).manual) return;
     const identity = {
       athleteId: account.athleteId,
       provider: 'STRAVA' as const,
