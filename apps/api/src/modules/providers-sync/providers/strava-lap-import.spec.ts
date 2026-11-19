@@ -37,7 +37,7 @@ const incoming = {
 function setup(failLaps = false) {
   const tx = {
     $queryRaw: jest.fn().mockResolvedValue([]),
-    eventActivity: { findFirst: jest.fn().mockResolvedValue(null) },
+    eventActivity: { findFirst: jest.fn().mockResolvedValue(null), update: jest.fn() },
     event: {
       findMany: jest.fn().mockResolvedValue([]),
       create: jest.fn().mockResolvedValue({
@@ -133,9 +133,7 @@ describe('Strava original-lap import wiring', () => {
     };
     prisma.eventActivity.findFirst.mockResolvedValue(health as never);
     tx.eventActivity.findFirst.mockResolvedValue({ stream: {} } as never);
-    (tx.eventActivity as { update?: jest.Mock }).update = jest
-      .fn()
-      .mockResolvedValue({});
+    tx.eventActivity.update.mockResolvedValue({});
     const laps = jest
       .spyOn(service, 'importOriginalLaps')
       .mockResolvedValue({ imported: 1, protectedExistingSegments: false });
